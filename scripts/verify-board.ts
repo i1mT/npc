@@ -1,12 +1,13 @@
-import { resetSimDb } from "../src/db/connection";
-import { getBoardMeeting, listEvents, setStatus } from "../src/db/sim";
-import { applyBoardDirective, BoardDecisionError, runDailyWorkflow } from "../src/mastra";
+import { loadEnvConfig } from "@next/env";
+
+loadEnvConfig(process.cwd());
 
 async function expectBoardError(label: string, fn: () => void, code: string, status: number) {
   try {
     fn();
   } catch (error) {
-    if (error instanceof BoardDecisionError && error.code === code && error.status === status) {
+    const candidate = error as { code?: string; status?: number };
+    if (candidate.code === code && candidate.status === status) {
       return { label, ok: true, code, status };
     }
     throw error;
@@ -15,6 +16,10 @@ async function expectBoardError(label: string, fn: () => void, code: string, sta
 }
 
 async function main() {
+  const { resetSimDb } = await import("../src/db/connection");
+  const { getBoardMeeting, listEvents, setStatus } = await import("../src/db/sim");
+  const { applyBoardDirective, runDailyWorkflow } = await import("../src/mastra");
+
   resetSimDb();
   setStatus("idle");
 
@@ -46,6 +51,6 @@ async function main() {
 }
 
 main().catch((error) => {
-  console.error(error);
+  console.error(error instanceof Error ? error.stack ?? error.message : String(error));
   process.exit(1);
 });

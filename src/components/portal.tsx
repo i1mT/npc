@@ -11,6 +11,7 @@ export function Portal({ initialDays }: { initialDays: DaySummary[] }) {
   const [selectedDay, setSelectedDay] = useState(initialDays[0]?.day ?? 1);
   const [articles, setArticles] = useState<PublishedArticle[]>([]);
   const selected = useMemo(() => days.find((day) => day.day === selectedDay) ?? days[0], [days, selectedDay]);
+  const groupedRest = useMemo(() => groupArticlesByTag(articles.slice(1)), [articles]);
 
   async function refresh() {
     const dayResponse = await fetch("/api/days", { cache: "no-store" });
@@ -57,6 +58,7 @@ export function Portal({ initialDays }: { initialDays: DaySummary[] }) {
           <div>
             <p className="text-xs font-bold uppercase tracking-[0.28em] text-coral">AI industry newspaper</p>
             <h1 className="font-serif text-5xl leading-none md:text-7xl">AGI DAILY</h1>
+            {selected?.editorNote ? <p className="mt-3 max-w-3xl border-t border-ink pt-3 text-sm leading-6 text-ink/75">{selected.editorNote}</p> : null}
           </div>
           <div className="flex flex-wrap items-center gap-4 text-sm">
             <span className="flex items-center gap-2"><CalendarDays className="h-4 w-4" /> 第 {selected?.day} 期</span>
@@ -107,23 +109,42 @@ export function Portal({ initialDays }: { initialDays: DaySummary[] }) {
             </article>
           ) : null}
 
-          <div className="mt-8 grid gap-5 md:grid-cols-2 xl:grid-cols-3">
-            {rest.map((article) => (
-              <article key={article.id} className="border-t-4 border-ink bg-[#fbf8f0] p-4">
-                <div className="flex items-center justify-between text-xs text-ink/60">
-                  <span>{article.tags.slice(0, 2).join(" / ") || "AI"}</span>
-                  <span>Score {article.qualityScore}</span>
+          <div className="mt-8 space-y-8">
+            {groupedRest.map((group) => (
+              <section key={group.tag}>
+                <div className="mb-4 flex items-center gap-3 border-b border-ink pb-2">
+                  <h3 className="text-sm font-bold uppercase tracking-[0.18em] text-ink">{group.tag}</h3>
+                  <span className="text-xs text-ink/50">{group.articles.length}</span>
                 </div>
-                <h3 className="mt-3 font-serif text-2xl leading-tight">{article.titleZh}</h3>
-                <p className="mt-3 line-clamp-4 text-sm leading-6 text-ink/75">{article.summaryZh}</p>
-                <a className="mt-4 inline-flex items-center gap-2 text-xs font-bold uppercase" href={article.sourceUrl} target="_blank">
-                  Source <ExternalLink className="h-3.5 w-3.5" />
-                </a>
-              </article>
+                <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-3">
+                  {group.articles.map((article) => (
+                    <article key={article.id} className="border-t-4 border-ink bg-[#fbf8f0] p-4">
+                      <div className="flex items-center justify-between text-xs text-ink/60">
+                        <span>{article.tags.slice(0, 2).join(" / ") || "AI"}</span>
+                        <span>Score {article.qualityScore}</span>
+                      </div>
+                      <h3 className="mt-3 font-serif text-2xl leading-tight">{article.titleZh}</h3>
+                      <p className="mt-3 line-clamp-4 text-sm leading-6 text-ink/75">{article.summaryZh}</p>
+                      <a className="mt-4 inline-flex items-center gap-2 text-xs font-bold uppercase" href={article.sourceUrl} target="_blank">
+                        Source <ExternalLink className="h-3.5 w-3.5" />
+                      </a>
+                    </article>
+                  ))}
+                </div>
+              </section>
             ))}
           </div>
         </section>
       </div>
     </main>
   );
+}
+
+function groupArticlesByTag(articles: PublishedArticle[]) {
+  const groups = new Map<string, PublishedArticle[]>();
+  for (const article of articles) {
+    const tag = article.tags[0] || "AI";
+    groups.set(tag, [...(groups.get(tag) ?? []), article]);
+  }
+  return Array.from(groups.entries()).map(([tag, groupArticles]) => ({ tag, articles: groupArticles }));
 }

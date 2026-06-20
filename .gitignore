@@ -1,6 +1,7 @@
 .next
 node_modules
 sim.db
+memory.db*
 *.log
 .env
 .env.local

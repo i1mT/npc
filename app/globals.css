@@ -21,6 +21,37 @@ button, input, textarea, select {
   font: inherit;
 }
 
+/* ── Chat event animation ───────────────────────────────────── */
+@keyframes event-in {
+  from { opacity: 0; transform: translateY(10px); }
+  to   { opacity: 1; transform: translateY(0);    }
+}
+.animate-event-in {
+  opacity: 0;
+  animation: event-in 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+/* ── Typing indicator dots ──────────────────────────────────── */
+@keyframes typing-dot {
+  0%, 80%, 100% { transform: scale(0.6); opacity: 0.4; }
+  40%           { transform: scale(1);   opacity: 1;   }
+}
+.typing-dot { animation: typing-dot 1.2s ease-in-out infinite; }
+.typing-dot:nth-child(1) { animation-delay: 0s;   }
+.typing-dot:nth-child(2) { animation-delay: 0.2s; }
+.typing-dot:nth-child(3) { animation-delay: 0.4s; }
+
+/* ── Markdown view ──────────────────────────────────────────── */
+.md-view h1 { font-size: 1.125rem; font-weight: 900; margin-bottom: 0.75rem; }
+.md-view h2 { font-size: 0.75rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.12em; color: rgba(22,22,22,.4); margin-top: 1.25rem; margin-bottom: 0.5rem; }
+.md-view h3 { font-size: 0.875rem; font-weight: 700; margin-bottom: 0.25rem; }
+.md-view p  { font-size: 0.875rem; line-height: 1.75; color: rgba(22,22,22,.8); margin-bottom: 0.75rem; }
+.md-view ul { margin-left: 0; margin-bottom: 0.75rem; list-style: none; padding: 0; }
+.md-view li { font-size: 0.875rem; line-height: 1.7; color: rgba(22,22,22,.75); display: flex; gap: 0.5rem; margin-bottom: 0.25rem; }
+.md-view code { font-family: monospace; font-size: 0.75rem; background: rgba(22,22,22,.07); border-radius: 3px; padding: 1px 5px; }
+.md-view strong { font-weight: 700; }
+.md-view hr { border: none; border-top: 1px solid #d8d0c2; margin: 1rem 0; }
+
 .newspaper-grid {
   background-image:
     linear-gradient(to right, rgba(22, 22, 22, 0.08) 1px, transparent 1px),

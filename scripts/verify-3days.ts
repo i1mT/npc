@@ -1,16 +1,22 @@
-import { resetSimDb } from "../src/db/connection";
-import { countSourceArticles } from "../src/db/articles";
-import { listDays, listEvents, listPublishedArticles, setStatus } from "../src/db/sim";
-import { runDailyWorkflow } from "../src/mastra";
+import { loadEnvConfig } from "@next/env";
+
+loadEnvConfig(process.cwd());
 
 async function main() {
+  const { resetSimDb } = await import("../src/db/connection");
+  const { countSourceArticles } = await import("../src/db/articles");
+  const { listDays, listEvents, listPublishedArticles, setStatus } = await import("../src/db/sim");
+  const { runDailyWorkflow } = await import("../src/mastra");
+
   resetSimDb();
   setStatus("idle");
   const sourceCount = countSourceArticles();
   if (sourceCount < 30) throw new Error(`Expected at least 30 source articles, got ${sourceCount}`);
 
   for (let day = 1; day <= 3; day += 1) {
+    console.log(`[verify:3days] starting day ${day}`);
     await runDailyWorkflow(day);
+    console.log(`[verify:3days] completed day ${day}`);
   }
 
   const days = listDays().sort((a, b) => a.day - b.day);
@@ -28,6 +34,6 @@ async function main() {
 }
 
 main().catch((error) => {
-  console.error(error);
+  console.error(error instanceof Error ? error.stack ?? error.message : String(error));
   process.exit(1);
 });

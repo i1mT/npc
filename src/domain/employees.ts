@@ -87,10 +87,13 @@ export function createEmployee(input: CreateEmployeeInput) {
   tx();
 
   agentFactory.register(handle, {
-    displayName: input.displayName,
-    roleTemplate: input.roleTemplate,
-    instructions: systemPrompt,
-    tools: [...role.defaultTools, ...input.toolGrants.map((grant) => grant.tool)],
+    displayName:     input.displayName,
+    roleTemplate:    input.roleTemplate,
+    instructions:    systemPrompt,
+    soul:            "",
+    memory:          "",
+    grantedToolNames: [],
+    tools:           [...role.defaultTools, ...input.toolGrants.map((grant) => grant.tool)],
     instructionHash: createHash("sha256").update(systemPrompt).digest("hex").slice(0, 12),
     mastraRuntimeId: `mastra-runtime-${process.pid}`,
   });

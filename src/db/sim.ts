@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { getSimDb } from "@/db/connection";
+import { articleCoverUrl } from "@/lib/cover";
 import type { BoardMeeting, BoardMeetingStatus, DayState, DaySummary, EventType, LayerName, PublishedArticle, RuleDefinition, SimEvent, SimStatus, WorkEvent } from "@/lib/types";
 
 type DayRow = {
@@ -11,6 +12,7 @@ type DayRow = {
   ad_revenue: number;
   llm_cost: number;
   is_board_day: number;
+  editor_note: string | null;
   completed_at: string | null;
   article_count?: number;
 };
@@ -48,7 +50,7 @@ type WorkEventRow = {
 
 type LayerChangeRow = {
   id: string;
-  layer: LayerName;
+  layer: LayerName | "work";
   day: number;
   entity_table: string;
   entity_id: string;
@@ -79,6 +81,8 @@ type BoardMeetingRow = {
   day: number;
   status: BoardMeetingStatus;
   weekly_report: string;
+  auto_directive: string | null;
+  auto_directive_reason: string | null;
   directive: string | null;
   suspended_at: string;
   resumed_at: string | null;
@@ -107,6 +111,7 @@ function mapDay(row: DayRow): DaySummary {
     isBoardDay: Boolean(row.is_board_day),
     articleCount: row.article_count ?? 0,
     completedAt: row.completed_at,
+    editorNote: row.editor_note,
   };
 }
 
@@ -185,6 +190,8 @@ function mapBoardMeeting(row: BoardMeetingRow): BoardMeeting {
     day: row.day,
     status: row.status,
     weeklyReport: JSON.parse(row.weekly_report),
+    autoDirective: row.auto_directive,
+    autoDirectiveReason: row.auto_directive_reason,
     directive: row.directive,
     suspendedAt: row.suspended_at,
     resumedAt: row.resumed_at,
@@ -317,7 +324,7 @@ export function nextSeq(day: number) {
   return row.seq;
 }
 
-export function addEvent(input: Omit<SimEvent, "id" | "seq" | "createdAt">) {
+export function addEvent(input: Omit<SimEvent, "id" | "seq" | "createdAt"> & { costToken?: number; costYuan?: number }) {
   ensureBaselineData();
   const now = new Date().toISOString();
   const layer = inferEventLayer(input.eventType, input.agentId);
@@ -346,8 +353,8 @@ export function addEvent(input: Omit<SimEvent, "id" | "seq" | "createdAt">) {
       event.content,
       event.metadata ? JSON.stringify(event.metadata) : null,
       null,
-      0,
-      0,
+      input.costToken ?? 0,
+      input.costYuan ?? 0,
       event.createdAt,
     );
   projectWorkEvent(event.id);
@@ -359,7 +366,7 @@ export function addLayerEvent(input: {
   actorId: string;
   actorName: string;
   actorType?: "agent" | "board" | "system" | "ceo";
-  layer: LayerName;
+  layer: LayerName | "work";
   eventType: WorkEvent["eventType"];
   action: string;
   content: string;
@@ -418,6 +425,11 @@ export function listPublishedArticles(day: number) {
   return rows.map(mapArticle);
 }
 
+export function getArticle(id: string): PublishedArticle | null {
+  const row = getSimDb().prepare("SELECT * FROM published_articles WHERE id = ?").get(id) as ArticleRow | undefined;
+  return row ? mapArticle(row) : null;
+}
+
 export function publishArticles(articles: Omit<PublishedArticle, "id" | "createdAt">[]) {
   const db = getSimDb();
   const stmt = db.prepare(
@@ -429,8 +441,10 @@ export function publishArticles(articles: Omit<PublishedArticle, "id" | "created
   const tx = db.transaction(() => {
     for (const article of articles) {
       const id = randomUUID();
-      stmt.run(id, article.day, article.sourceId, article.titleZh, article.summaryZh, article.contentZh, article.sourceUrl, article.imageUrl, JSON.stringify(article.tags), article.qualityScore, article.qualityReason, now);
-      published.push({ ...article, id, createdAt: now });
+      // Fall back to picsum deterministic cover when source has no image
+      const imageUrl = article.imageUrl ?? articleCoverUrl(article.sourceId);
+      stmt.run(id, article.day, article.sourceId, article.titleZh, article.summaryZh, article.contentZh, article.sourceUrl, imageUrl, JSON.stringify(article.tags), article.qualityScore, article.qualityReason, now);
+      published.push({ ...article, id, imageUrl, createdAt: now });
     }
   });
   tx();
@@ -449,18 +463,22 @@ export function addBoardDirective(day: number, directive: string) {
 }
 
 export function suspendBoardMeeting(day: number, weeklyReport: Record<string, unknown>) {
+  const autoDirective = typeof weeklyReport.autoDirective === "string" ? weeklyReport.autoDirective : null;
+  const autoDirectiveReason = typeof weeklyReport.autoDirectiveReason === "string" ? weeklyReport.autoDirectiveReason : null;
   getSimDb()
     .prepare(
-      `INSERT INTO board_meetings (day, status, weekly_report, directive, suspended_at, resumed_at)
-       VALUES (?, 'pending', ?, NULL, ?, NULL)
+      `INSERT INTO board_meetings (day, status, weekly_report, auto_directive, auto_directive_reason, directive, suspended_at, resumed_at)
+       VALUES (?, 'pending', ?, ?, ?, NULL, ?, NULL)
        ON CONFLICT(day) DO UPDATE SET
        status = 'pending',
        weekly_report = excluded.weekly_report,
+       auto_directive = excluded.auto_directive,
+       auto_directive_reason = excluded.auto_directive_reason,
        directive = NULL,
        suspended_at = excluded.suspended_at,
        resumed_at = NULL`,
     )
-    .run(day, JSON.stringify(weeklyReport), new Date().toISOString());
+    .run(day, JSON.stringify(weeklyReport), autoDirective, autoDirectiveReason, new Date().toISOString());
 }
 
 export function getBoardMeeting(day: number) {
@@ -507,15 +525,67 @@ export function ensureBaselineData() {
   ] as const) {
     db.prepare("INSERT OR IGNORE INTO rules (id, code, category, text, threshold_json, effective_from, status) VALUES (?, ?, ?, ?, '{}', 1, 'active')").run(...rule);
   }
-  bootstrapEmployee("editor-in-chief", "总编 Agent", "editor_in_chief", "editor-in-chief", 1, "bootstrap");
-  bootstrapEmployee("editor", "编辑 Agent", "editor", "editor", 1, "bootstrap");
+  bootstrapEmployee("editor-in-chief", "总编 Agent", "editor_in_chief", "editor-in-chief",
+    INITIAL_SYSTEM_PROMPTS.editor_in_chief, INITIAL_SOULS.editor_in_chief, INITIAL_TOOLS.editor_in_chief, 1, "bootstrap");
+  bootstrapEmployee("editor", "编辑 Agent", "editor", "editor",
+    INITIAL_SYSTEM_PROMPTS.editor, INITIAL_SOULS.editor, INITIAL_TOOLS.editor, 1, "bootstrap");
   db.prepare("INSERT OR IGNORE INTO org_relations (id, superior_id, subordinate_id, effective_from) VALUES (?, ?, ?, 1)").run("org-editor-chief-editor", "editor-in-chief", "editor");
 }
 
-function bootstrapEmployee(id: string, name: string, role: string, handle: string, day: number, eventId: string) {
+const INITIAL_SYSTEM_PROMPTS: Record<string, string> = {
+  editor_in_chief: `负责 AGI Daily 编辑部的日常统筹与内容决策。
+工作职责：
+- 每日开场：了解今日指标和话题趋势，向团队分配任务
+- 审核编辑选送的文章，把控内容质量和选题方向
+- 调用 get_metrics 了解 DAU/声誉/资金现状
+- 根据指标决定选题策略（深度 vs 广度，热点 vs 长尾）
+- 批准发布后 @编辑 执行；必要时调用 hire_employee 扩编团队`,
+
+  editor: `负责 AGI Daily 每日内容的选稿、改写和发布。
+工作职责：
+- 调用 fetch_articles 获取今日候选文章（id 字段是十六进制，发布时必须用这个）
+- 按总编设定的方向筛选 8-10 篇，撰写中文标题和摘要
+- 在群聊中向总编报告选稿结果，等待审核批准
+- 总编批准后调用 publish_articles 一次性发布
+- 发布后调用 write_memory 记录今日选题洞察
+⚠️ publish_articles 的 sourceId 必须是 fetch_articles 返回的 id 字段（十六进制字符串）`,
+};
+
+const INITIAL_SOULS: Record<string, string> = {
+  editor_in_chief: `## 人格特质
+严谨而有洞察力。相信内容质量是一切增长的基础，对新技术持开放心态但不追风口。
+习惯在不确定中找到最优解，善于平衡质量与效率。
+
+## 价值观
+- **质量优先**：宁可少发，不发低质
+- **数据驱动**：用指标说话，但不被指标绑架
+- **团队赋能**：给每位成员清晰的方向和充分的自主空间
+
+## 工作风格
+语言简洁直接，开会不废话；善于提问而不是给答案；对好内容有发自内心的兴奋。`,
+
+  editor: `## 人格特质
+对 AI 技术有真实的好奇心，相信优质内容能改变读者对复杂技术的认知。
+细心负责，对选题有自己的判断标准。
+
+## 价值观
+- **读者第一**：每篇文章都要能让目标读者有所收获
+- **来源可信**：只发有据可查、逻辑清晰的内容
+- **持续学习**：把每次选稿当作了解前沿的机会
+
+## 工作风格
+做事有条理，汇报清晰；对被打回的稿件会认真分析原因；偶尔会对某个技术话题格外兴奋。`,
+};
+
+const INITIAL_TOOLS: Record<string, string> = {
+  editor_in_chief: JSON.stringify(["fetch_articles", "get_metrics", "read_memory", "write_memory", "update_my_soul", "list_employees", "hire_employee", "authorize_budget"]),
+  editor: JSON.stringify(["fetch_articles", "publish_articles", "read_memory", "write_memory", "update_my_soul"]),
+};
+
+function bootstrapEmployee(id: string, name: string, role: string, handle: string, systemPrompt: string, soul: string, toolsGranted: string, day: number, eventId: string) {
   getSimDb()
-    .prepare("INSERT OR IGNORE INTO employees (id, display_name, role_template, status, joined_day, system_prompt, agent_handle, caused_by_event) VALUES (?, ?, ?, 'active', ?, ?, ?, ?)")
-    .run(id, name, role, day, `${name} / ${role}。外部 LLM 配置只从环境变量读取。`, handle, eventId);
+    .prepare("INSERT OR IGNORE INTO employees (id, display_name, role_template, status, joined_day, system_prompt, soul, tools_granted, agent_handle, caused_by_event) VALUES (?, ?, ?, 'active', ?, ?, ?, ?, ?, ?)")
+    .run(id, name, role, day, systemPrompt, soul, toolsGranted, handle, eventId);
 }
 
 function projectWorkEvent(eventId: string) {

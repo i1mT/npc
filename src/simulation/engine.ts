@@ -1,5 +1,5 @@
 import { getStatus, setStatus } from "@/db/sim";
-import { runDailyWorkflow } from "@/mastra";
+import { runAgenticDay } from "@/mastra";
 import type { DayState } from "@/lib/types";
 
 class SimClock {
@@ -33,7 +33,7 @@ class SimClock {
     const status = getStatus();
     setStatus("running");
     try {
-      return await runDailyWorkflow(status.day + 1);
+      return await runAgenticDay(status.day + 1);
     } finally {
       setStatus("idle");
     }
@@ -44,7 +44,7 @@ class SimClock {
     while (!this.stopRequested) {
       const status = getStatus();
       if (targetDays && completed >= targetDays) break;
-      await runDailyWorkflow(status.day + 1);
+      await runAgenticDay(status.day + 1);
       completed += 1;
       await new Promise((resolve) => setTimeout(resolve, 250));
     }

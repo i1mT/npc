@@ -1,10 +1,10 @@
-import { getLayerDay, getWorkEventImpact, listEvents, listPublishedArticles, listWorkEvents, listDays } from "@/db/sim";
+import { getDay, getLayerDay, getWorkEventImpact, listEvents, listPublishedArticles, listWorkEvents, listDays } from "@/db/sim";
 import type { LayerName } from "@/lib/types";
 
 const layers: LayerName[] = ["mission", "environment", "memory", "structure", "rules", "resource", "growth"];
 
 export function getPortalDays() {
-  return { days: listDays().map((day) => ({ day: day.day, dau: day.dau, reputation: day.reputation, articleCount: day.articleCount, isBoardDay: day.isBoardDay })) };
+  return { days: listDays().map((day) => ({ day: day.day, dau: day.dau, reputation: day.reputation, articleCount: day.articleCount, isBoardDay: day.isBoardDay, editorNote: day.editorNote })) };
 }
 
 export function getPortalDay(day: number) {
@@ -12,21 +12,26 @@ export function getPortalDay(day: number) {
   const mission = getLayerDay("mission", day).snapshot;
   const memory = getLayerDay("memory", day).snapshot;
   const articles = listPublishedArticles(day);
+  const dayState = getDay(day);
+  const mappedArticles = articles.map((article) => ({
+    id: article.id,
+    titleZh: article.titleZh,
+    summaryZh: article.summaryZh,
+    contentZh: article.contentZh,
+    tags: article.tags,
+    qualityScore: article.qualityScore,
+    sourceUrl: article.sourceUrl,
+    imageUrl: article.imageUrl,
+    memoryHighlights: summarizeSnapshot(memory),
+    behindUrl: `/api/portal/day/${day}/behind?articleId=${encodeURIComponent(article.id)}`,
+  }));
   return {
     day,
+    editorNote: dayState?.editorNote ?? null,
     mission: summarizeSnapshot(mission),
     metrics: summarizeSnapshot(resource),
-    articles: articles.map((article) => ({
-      id: article.id,
-      titleZh: article.titleZh,
-      summaryZh: article.summaryZh,
-      tags: article.tags,
-      qualityScore: article.qualityScore,
-      sourceUrl: article.sourceUrl,
-      imageUrl: article.imageUrl,
-      memoryHighlights: summarizeSnapshot(memory),
-      behindUrl: `/api/portal/day/${day}/behind?articleId=${encodeURIComponent(article.id)}`,
-    })),
+    articles: mappedArticles,
+    articleGroups: groupArticlesByPrimaryTag(mappedArticles),
     contributors: summarizeSnapshot(getLayerDay("structure", day).snapshot),
     changeSummary: Object.fromEntries(layers.map((layer) => [layer, getLayerDay(layer, day).changes.length])),
   };
@@ -83,4 +88,13 @@ function summarizeSnapshot(snapshot: Record<string, unknown>) {
   const entries = Object.entries(snapshot);
   if (!entries.length) return null;
   return entries.length === 1 ? entries[0][1] : snapshot;
+}
+
+function groupArticlesByPrimaryTag<T extends { tags: string[] }>(articles: T[]) {
+  const groups = new Map<string, T[]>();
+  for (const article of articles) {
+    const tag = article.tags[0] || "AI";
+    groups.set(tag, [...(groups.get(tag) ?? []), article]);
+  }
+  return Array.from(groups.entries()).map(([tag, items]) => ({ tag, articles: items }));
 }

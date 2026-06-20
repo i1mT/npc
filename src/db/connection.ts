@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import Database from "better-sqlite3";
 import fs from "node:fs";
 import path from "node:path";
@@ -17,6 +18,7 @@ export function getSimDb() {
     migrateSimEventsTable(simDb);
     const schema = fs.readFileSync(path.join(root, "src/db/schema.sql"), "utf8");
     simDb.exec(schema);
+    migrateAddedColumns(simDb);
   }
   return simDb;
 }
@@ -48,6 +50,36 @@ function migrateSimEventsTable(db: Database.Database) {
     FROM sim_events;
     DROP TABLE sim_events;
   `);
+}
+
+function migrateAddedColumns(db: Database.Database) {
+  addColumnIfMissing(db, "sim_days", "editor_note", "TEXT");
+  addColumnIfMissing(db, "board_meetings", "auto_directive", "TEXT");
+  addColumnIfMissing(db, "board_meetings", "auto_directive_reason", "TEXT");
+  addColumnIfMissing(db, "employees", "soul", "TEXT");
+  addColumnIfMissing(db, "employees", "tools_granted", "TEXT");
+  addColumnIfMissing(db, "employees", "memory", "TEXT");
+}
+
+export function upsertSoulSnapshot(employeeId: string, day: number, soulMd: string, memoryMd: string) {
+  const db = getSimDb();
+  db.prepare(`
+    INSERT INTO employee_soul_snapshots (id, employee_id, day, soul_md, memory_md, created_at)
+    VALUES (?, ?, ?, ?, ?, datetime('now'))
+    ON CONFLICT(employee_id, day) DO UPDATE SET soul_md=excluded.soul_md, memory_md=excluded.memory_md
+  `).run(randomUUID(), employeeId, day, soulMd, memoryMd);
+}
+
+export function getSoulSnapshots(employeeId: string) {
+  return getSimDb()
+    .prepare("SELECT day, soul_md, memory_md FROM employee_soul_snapshots WHERE employee_id = ? ORDER BY day DESC")
+    .all(employeeId) as { day: number; soul_md: string; memory_md: string }[];
+}
+
+function addColumnIfMissing(db: Database.Database, table: string, column: string, definition: string) {
+  const rows = db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
+  if (rows.some((row) => row.name === column)) return;
+  db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
 }
 
 export function getArticleDb() {

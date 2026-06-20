@@ -2,7 +2,7 @@ import { addEvent } from "@/db/sim";
 import { emit } from "@/simulation/event-bus";
 import type { SimEvent } from "@/lib/types";
 
-export function logEvent(input: Omit<SimEvent, "id" | "seq" | "createdAt">) {
+export function logEvent(input: Omit<SimEvent, "id" | "seq" | "createdAt"> & { costToken?: number; costYuan?: number }) {
   const event = addEvent(input);
   emit(event);
   return event;
