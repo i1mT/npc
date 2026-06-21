@@ -265,7 +265,7 @@ const MENTION_RE_GLOBAL = /@([A-Za-z0-9_\-一-鿿]{1,16})/g;
 
 function MentionChip({ name }: { name: string }) {
   return (
-    <span className="inline-flex items-center rounded-full bg-cobalt/12 px-1.5 py-0.5 text-[11px] font-semibold text-cobalt leading-none mx-0.5 whitespace-nowrap">
+    <span className="inline-flex items-center rounded bg-cobalt px-2 py-0.5 text-[13px] font-bold text-white leading-snug mx-0.5 whitespace-nowrap">
       @{name}
     </span>
   );
