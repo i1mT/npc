@@ -1,14 +1,16 @@
 import "./globals.css";
 import type { Metadata } from "next";
-import { Playfair_Display, Source_Sans_3 } from "next/font/google";
+import { Cormorant_Garamond, Inter } from "next/font/google";
 
-const playfair = Playfair_Display({
+const cormorant = Cormorant_Garamond({
   subsets: ["latin"],
+  weight: ["300", "400", "500", "600", "700"],
+  style: ["normal", "italic"],
   variable: "--font-serif",
   display: "swap",
 });
 
-const sourceSans = Source_Sans_3({
+const inter = Inter({
   subsets: ["latin"],
   variable: "--font-sans",
   display: "swap",
@@ -21,7 +23,7 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="zh-CN" className={`${playfair.variable} ${sourceSans.variable}`}>
+    <html lang="zh-CN" className={`${cormorant.variable} ${inter.variable}`}>
       <body>{children}</body>
     </html>
   );

@@ -1,5 +1,5 @@
 import { listDays } from "@/db/sim";
-import { getSimDb } from "@/db/connection";
+import { dbFirst } from "@/db/connection";
 import type { DaySummary } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
@@ -41,7 +41,7 @@ function BarChart({ data, color }: { data: { label: string; value: number }[]; c
       {data.map(({ label, value }) => (
         <div key={label} className="group relative flex flex-1 flex-col items-center gap-0.5">
           <div
-            className="w-full rounded-t-sm transition-all"
+            className="w-full transition-all"
             style={{ height: `${Math.max((value / max) * 100, 4)}%`, backgroundColor: color }}
           />
           <span className="text-[9px] text-ink/35">{label}</span>
@@ -64,11 +64,11 @@ function MetricCard({
   color: string; sparkValues: number[];
 }) {
   return (
-    <div className="rounded-lg border border-rule bg-white p-5">
+    <div className="border border-rule bg-white p-5">
       <div className="mb-3 flex items-start justify-between">
         <div>
-          <p className="text-xs text-ink/40">{label}</p>
-          <p className="mt-0.5 text-2xl font-black" style={{ color }}>{value}</p>
+          <p className="text-[9px] font-bold uppercase tracking-[0.25em] text-ink/35">{label}</p>
+          <p className="mt-1 font-serif text-3xl" style={{ color }}>{value}</p>
           {sub && <p className="text-xs text-ink/40">{sub}</p>}
         </div>
         {delta != null && (
@@ -84,15 +84,16 @@ function MetricCard({
 
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
-export default function DashboardPage() {
-  const days: DaySummary[] = listDays().reverse(); // ascending for charts
+export default async function DashboardPage() {
+  const days: DaySummary[] = (await listDays()).reverse(); // ascending for charts
   const latest = days[days.length - 1];
   const prev   = days[days.length - 2];
 
-  const db = getSimDb();
-  const agentCount = (db.prepare("SELECT COUNT(*) AS c FROM employees WHERE status='active'").get() as { c: number }).c;
-  const articleCount = (db.prepare("SELECT COUNT(*) AS c FROM published_articles").get() as { c: number }).c;
-  const eventCount = (db.prepare("SELECT COUNT(*) AS c FROM work_events").get() as { c: number }).c;
+  const [agentCount, articleCount, eventCount] = await Promise.all([
+    dbFirst<{ c: number }>("SELECT COUNT(*) AS c FROM employees WHERE status='active'"),
+    dbFirst<{ c: number }>("SELECT COUNT(*) AS c FROM published_articles"),
+    dbFirst<{ c: number }>("SELECT COUNT(*) AS c FROM work_events"),
+  ]).then(([agents, articles, events]) => [agents?.c ?? 0, articles?.c ?? 0, events?.c ?? 0]);
 
   if (!latest) {
     return (
@@ -114,8 +115,8 @@ export default function DashboardPage() {
     <div className="h-full overflow-y-auto p-6 space-y-6">
       {/* Page header */}
       <div>
-        <h1 className="text-xl font-black">AGI Daily 公司概览</h1>
-        <p className="mt-0.5 text-sm text-ink/50">
+        <h1 className="font-serif text-3xl">AGI Daily 公司概览</h1>
+        <p className="mt-1 text-sm text-ink/40">
           已运行 {days.length} 天 · {agentCount} 名 Agent · {articleCount} 篇文章 · {eventCount} 条工作事件
         </p>
       </div>
@@ -152,25 +153,25 @@ export default function DashboardPage() {
       {/* Charts row */}
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
         {/* Articles per day */}
-        <div className="rounded-lg border border-rule bg-white p-5">
-          <p className="mb-3 text-xs font-bold uppercase tracking-widest text-ink/40">每日文章数</p>
+        <div className="border border-rule bg-white p-5">
+          <p className="mb-3 text-[9px] font-bold uppercase tracking-[0.3em] text-ink/35">每日文章数</p>
           {articleByDay.length > 0
             ? <BarChart data={articleByDay} color="#254edb" />
             : <p className="text-sm text-ink/40">暂无数据</p>}
         </div>
 
         {/* Revenue history */}
-        <div className="rounded-lg border border-rule bg-white p-5">
-          <p className="mb-1 text-xs font-bold uppercase tracking-widest text-ink/40">广告收入趋势</p>
-          <p className="mb-3 text-xl font-black text-mint">¥{latest.adRevenue?.toFixed(2) ?? "—"} <span className="text-sm font-normal text-ink/40">今日</span></p>
+        <div className="border border-rule bg-white p-5">
+          <p className="mb-1 text-[9px] font-bold uppercase tracking-[0.3em] text-ink/35">广告收入趋势</p>
+          <p className="mb-3 font-serif text-2xl text-mint">¥{latest.adRevenue?.toFixed(2) ?? "—"} <span className="text-sm font-sans font-normal text-ink/35">今日</span></p>
           <Sparkline values={days.map(d => d.adRevenue ?? 0)} color="#2e9e6b" fill="#2e9e6b18" />
         </div>
       </div>
 
       {/* Day summary table */}
-      <div className="rounded-lg border border-rule bg-white overflow-hidden">
+      <div className="border border-rule bg-white overflow-hidden">
         <div className="border-b border-rule px-5 py-3">
-          <p className="text-xs font-bold uppercase tracking-widest text-ink/40">每期概况</p>
+          <p className="text-[9px] font-bold uppercase tracking-[0.3em] text-ink/35">每期概况</p>
         </div>
         <div className="overflow-x-auto">
           <table className="w-full text-sm">

@@ -20,6 +20,12 @@
 - `tool_registry`、`tool_grants`、`tool_calls`：能力层工具和调用记录。
 - `memory_entries`、`memory_writes`、`memory_reads`、`memory_links`：记忆层读写与引用链。
 
+## 日结口径
+
+- 广告收入、订阅收入和净收入的核心参数统一放在 `src/simulation/formulas.ts`。
+- 有机广告按声誉分档 CPM 结算，当前低/中/高声誉 CPM 分别为 ¥30、¥60、¥120。
+- 订阅收入按订阅用户数 × ¥1.8/天计算，`daily_settlement.revenue_breakdown.subscription` 和 Capital 变更必须使用同一函数。
+
 ## 数据原则
 
 1. `work_events` 是状态变化的事实源；能解释的变化应能追溯到事件。

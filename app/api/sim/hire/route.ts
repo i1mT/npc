@@ -21,11 +21,11 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "roleTemplate, displayName, mandate 为必填项" }, { status: 400 });
     }
 
-    const days = listDays();
+    const days = await listDays();
     const currentDay = days[0]?.day ?? 1;
 
     const handle = body.handle ?? `${roleTemplate}-${Date.now()}`;
-    const { id, event } = hireEmployee({
+    const { id, event } = await hireEmployee({
       day: currentDay,
       displayName,
       roleTemplate,

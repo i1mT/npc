@@ -58,8 +58,15 @@ EVOMAP_DEVELOPER_BASE=https://evomap.ai
 EVOMAP_OAUTH_REDIRECT_URI=http://localhost:3000/api/evomap/oauth/callback
 ```
 
+- Tavily MCP 封面图能力是可选配置，用于让编辑 Agent 通过只读搜索寻找候选文章封面图。未配置时流程会继续运行，并回退到原文图或 deterministic fallback：
+
+```bash
+TAVILY_API_KEY=...
+```
+
 - 本地 OAuth token 保存于 `.evomap/oauth-token.json`，该目录已加入 `.gitignore`，不得提交。
 - 工具页 `/dashboard/tools` 提供 EvoMap Connect / Disconnect；Agent 工具只使用 `recipe:read gene:read reuse:query` 只读 scope。
+- Tavily MCP 只在编辑 Agent 回合动态注入；`publish_articles` 会优先使用原文 `cover_img/image_url/content img`，只有原文缺图时才接受编辑提交的 HTTPS `imageUrl`。
 - `src/mastra/runtime/evomap-model.ts` 使用 Chat Completions；如果外部网关不支持 Responses API，不要改回默认 `createOpenAI()(model)`。
 - `src/mastra/runtime/memory.ts` 默认使用 `memory.db` 保存 Mastra Memory 和向量索引，可通过 `NPC_MEMORY_DB_URL` 切换。
 - 无效 LLM token 应让流程失败并记录 `error` 事件，不能回退到本地模板或伪造内容。

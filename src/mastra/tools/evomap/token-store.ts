@@ -1,11 +1,10 @@
-import { mkdir, readFile, rm, writeFile, chmod } from "node:fs/promises";
 import { randomBytes } from "node:crypto";
-import path from "node:path";
+import { dbAll, dbFirst, dbRun } from "@/db/connection";
 
-const STORE_DIR = path.join(process.cwd(), ".evomap");
-const TOKEN_PATH = path.join(STORE_DIR, "oauth-token.json");
-const STATE_PATH = path.join(STORE_DIR, "oauth-state.json");
 const STATE_TTL_MS = 10 * 60 * 1000;
+const TOKEN_ID = "default";
+
+let initialized = false;
 
 export type EvoMapTokenRecord = {
   accessToken: string;
@@ -16,13 +15,6 @@ export type EvoMapTokenRecord = {
   issuedAt: number;
   livemode?: boolean;
 };
-
-type PendingStateRecord = {
-  verifier: string;
-  createdAt: number;
-};
-
-type PendingStateStore = Record<string, PendingStateRecord>;
 
 export type EvoMapOAuthStatus = {
   connected: boolean;
@@ -38,34 +30,54 @@ export function createOAuthState() {
 }
 
 export async function savePendingState(state: string, verifier: string) {
-  const states = await readPendingStates();
-  states[state] = { verifier, createdAt: Date.now() };
-  await writeJson(STATE_PATH, pruneStates(states));
+  await ensureTables();
+  await pruneExpiredStates();
+  await dbRun(
+    `INSERT OR REPLACE INTO evomap_oauth_states (state, verifier, created_at)
+     VALUES (?, ?, ?)`,
+    state,
+    verifier,
+    Date.now(),
+  );
 }
 
 export async function consumePendingState(state: string) {
-  const states = await readPendingStates();
-  const record = states[state];
-  delete states[state];
-  await writeJson(STATE_PATH, pruneStates(states));
-  if (!record || Date.now() - record.createdAt > STATE_TTL_MS) return null;
+  await ensureTables();
+  await pruneExpiredStates();
+  const record = await dbFirst<{ verifier: string; created_at: number }>(
+    "SELECT verifier, created_at FROM evomap_oauth_states WHERE state = ?",
+    state,
+  );
+  await dbRun("DELETE FROM evomap_oauth_states WHERE state = ?", state);
+  if (!record || Date.now() - record.created_at > STATE_TTL_MS) return null;
   return record.verifier;
 }
 
 export async function readToken() {
+  await ensureTables();
+  const row = await dbFirst<{ payload: string }>("SELECT payload FROM evomap_oauth_tokens WHERE id = ?", TOKEN_ID);
+  if (!row) return null;
   try {
-    return JSON.parse(await readFile(TOKEN_PATH, "utf8")) as EvoMapTokenRecord;
+    return JSON.parse(row.payload) as EvoMapTokenRecord;
   } catch {
     return null;
   }
 }
 
 export async function saveToken(token: EvoMapTokenRecord) {
-  await writeJson(TOKEN_PATH, token);
+  await ensureTables();
+  await dbRun(
+    `INSERT OR REPLACE INTO evomap_oauth_tokens (id, payload, updated_at)
+     VALUES (?, ?, ?)`,
+    TOKEN_ID,
+    JSON.stringify(token),
+    new Date().toISOString(),
+  );
 }
 
 export async function clearToken() {
-  await rm(TOKEN_PATH, { force: true });
+  await ensureTables();
+  await dbRun("DELETE FROM evomap_oauth_tokens WHERE id = ?", TOKEN_ID);
 }
 
 export async function getOAuthStatus(): Promise<EvoMapOAuthStatus> {
@@ -90,23 +102,33 @@ export async function getOAuthStatus(): Promise<EvoMapOAuthStatus> {
   };
 }
 
-async function readPendingStates(): Promise<PendingStateStore> {
-  try {
-    return pruneStates(JSON.parse(await readFile(STATE_PATH, "utf8")) as PendingStateStore);
-  } catch {
-    return {};
-  }
+async function ensureTables() {
+  if (initialized) return;
+  await dbRun(`
+    CREATE TABLE IF NOT EXISTS evomap_oauth_tokens (
+      id TEXT PRIMARY KEY,
+      payload TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    )
+  `);
+  await dbRun(`
+    CREATE TABLE IF NOT EXISTS evomap_oauth_states (
+      state TEXT PRIMARY KEY,
+      verifier TEXT NOT NULL,
+      created_at INTEGER NOT NULL
+    )
+  `);
+  initialized = true;
 }
 
-function pruneStates(states: PendingStateStore) {
-  const now = Date.now();
-  return Object.fromEntries(
-    Object.entries(states).filter(([, item]) => now - item.createdAt <= STATE_TTL_MS),
+async function pruneExpiredStates() {
+  await dbRun("DELETE FROM evomap_oauth_states WHERE created_at < ?", Date.now() - STATE_TTL_MS);
+  const rows = await dbAll<{ state: string }>(
+    "SELECT state FROM evomap_oauth_states ORDER BY created_at DESC LIMIT 100",
   );
-}
-
-async function writeJson(filePath: string, value: unknown) {
-  await mkdir(STORE_DIR, { recursive: true, mode: 0o700 });
-  await writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
-  await chmod(filePath, 0o600).catch(() => undefined);
+  if (rows.length < 100) return;
+  await dbRun(
+    `DELETE FROM evomap_oauth_states
+     WHERE state NOT IN (SELECT state FROM evomap_oauth_states ORDER BY created_at DESC LIMIT 100)`,
+  );
 }

@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getSimDb } from "@/db/connection";
+import { dbAll } from "@/db/connection";
 
 export const dynamic = "force-dynamic";
 
@@ -16,10 +16,10 @@ type AdPlacement = {
 
 export async function GET(_: Request, { params }: { params: Promise<{ day: string }> }) {
   const { day } = await params;
-  const db = getSimDb();
-  const rows = db
-    .prepare("SELECT id, day, slot_id, advertiser, payload, revenue FROM ad_placements WHERE day = ? ORDER BY revenue DESC")
-    .all(Number(day)) as { id: string; day: number; slot_id: string; advertiser: string; payload: string; revenue: number }[];
+  const rows = await dbAll<{ id: string; day: number; slot_id: string; advertiser: string; payload: string; revenue: number }>(
+    "SELECT id, day, slot_id, advertiser, payload, revenue FROM ad_placements WHERE day = ? ORDER BY revenue DESC",
+    Number(day),
+  );
 
   const ads: AdPlacement[] = rows.map(r => {
     const p = JSON.parse(r.payload) as { cpm?: number; impressions?: number; reason?: string };

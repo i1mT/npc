@@ -10,8 +10,8 @@ const bodySchema = z.object({ targetDay: z.number().int().min(0) });
 export async function POST(req: Request) {
   try {
     const body = bodySchema.parse(await req.json());
-    rollbackToDay(body.targetDay);
-    setStatus("idle");
+    await rollbackToDay(body.targetDay);
+    await setStatus("idle");
     return NextResponse.json({ ok: true });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

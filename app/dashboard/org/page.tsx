@@ -1,4 +1,4 @@
-import { getSimDb } from "@/db/connection";
+import { dbAll } from "@/db/connection";
 import { listDays } from "@/db/sim";
 import { dayToShortDate } from "@/lib/dates";
 import Link from "next/link";
@@ -135,28 +135,31 @@ export default async function OrgPage({
 }: {
   searchParams: Promise<{ day?: string }>;
 }) {
-  const db = getSimDb();
-  const days = listDays();
+  const days = await listDays();
   const query = await searchParams;
   const day = Number(query.day ?? days[0]?.day ?? 1);
 
   // Filter employees active on the selected day
-  const employees = db.prepare(
+  const employees = await dbAll<Employee>(
     `SELECT id, display_name, role_template, status, joined_day, left_day, agent_handle, daily_salary
      FROM employees
      WHERE joined_day <= ?
        AND (left_day IS NULL OR left_day > ?)
-     ORDER BY joined_day, id`
-  ).all(day, day) as Employee[];
+     ORDER BY joined_day, id`,
+    day,
+    day,
+  );
 
   // Org relations effective on selected day
-  const relations = db.prepare(
-    "SELECT id, superior_id, subordinate_id, effective_from FROM org_relations WHERE effective_from <= ? ORDER BY effective_from"
-  ).all(day) as OrgRelation[];
+  const relations = await dbAll<OrgRelation>(
+    "SELECT id, superior_id, subordinate_id, effective_from FROM org_relations WHERE effective_from <= ? ORDER BY effective_from",
+    day,
+  );
 
-  const orgChanges = db.prepare(
-    "SELECT day, seq, substr(content,1,200) AS content, actor_name FROM work_events WHERE event_type='org_change' AND day <= ? ORDER BY day DESC, seq DESC LIMIT 20"
-  ).all(day) as OrgChange[];
+  const orgChanges = await dbAll<OrgChange>(
+    "SELECT day, seq, substr(content,1,200) AS content, actor_name FROM work_events WHERE event_type='org_change' AND day <= ? ORDER BY day DESC, seq DESC LIMIT 20",
+    day,
+  );
 
   // Build parent → children map
   const childrenOf = new Map<string, string[]>();

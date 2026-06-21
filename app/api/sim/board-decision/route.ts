@@ -15,7 +15,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Invalid directive payload." }, { status: 400 });
   }
   try {
-    applyBoardDirective(parsed.data.day, parsed.data.directive);
+    await applyBoardDirective(parsed.data.day, parsed.data.directive);
     return NextResponse.json({ ok: true });
   } catch (error) {
     if (error instanceof BoardDecisionError) {

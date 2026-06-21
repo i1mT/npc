@@ -1,12 +1,13 @@
 import { AdminShell, HumanData, Panel } from "@/components/admin-shell";
-import { getSimDb } from "@/db/connection";
+import { dbAll } from "@/db/connection";
 
 export const dynamic = "force-dynamic";
 
-export default function BoardPage() {
-  const db = getSimDb();
-  const meetings = db.prepare("SELECT * FROM board_meetings ORDER BY day DESC").all() as { day: number; status: string; weekly_report: string; directive?: string | null; suspended_at: string; resumed_at?: string | null }[];
-  const directives = db.prepare("SELECT * FROM board_directives ORDER BY day DESC, applied_at DESC").all() as { id: string; day: number; directive: string; applied_at: string }[];
+export default async function BoardPage() {
+  const [meetings, directives] = await Promise.all([
+    dbAll<{ day: number; status: string; weekly_report: string; directive?: string | null; suspended_at: string; resumed_at?: string | null }>("SELECT * FROM board_meetings ORDER BY day DESC"),
+    dbAll<{ id: string; day: number; directive: string; applied_at: string }>("SELECT * FROM board_directives ORDER BY day DESC, applied_at DESC"),
+  ]);
   return (
     <AdminShell title="董事会记录" subtitle="查看每 7 天挂起、周报、指令和 resume 状态。">
       <div className="grid gap-4 lg:grid-cols-2">

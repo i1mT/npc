@@ -1,0 +1,29 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "main": ".open-next/worker.js",
+  "name": "agidaily-npc",
+  "compatibility_date": "2026-06-21",
+  "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
+  "assets": {
+    "directory": ".open-next/assets",
+    "binding": "ASSETS"
+  },
+  "services": [
+    {
+      "binding": "WORKER_SELF_REFERENCE",
+      "service": "agidaily-npc"
+    }
+  ],
+  "d1_databases": [
+    {
+      "binding": "NPC_DB",
+      "database_name": "npc-db",
+      "database_id": "e0a4e71f-4966-43a9-9142-80105ddfffdc"
+    }
+  ],
+  "vars": {
+    "EVOMAP_API_BASE": "https://api.evomap.ai/v1",
+    "EVOMAP_DEVELOPER_BASE": "https://evomap.ai",
+    "NPC_LLM_MODEL": "evomap-gemini-3.1-pro-preview"
+  }
+}

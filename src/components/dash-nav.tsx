@@ -42,7 +42,7 @@ export function SimControlBar() {
       if (event.eventType === "board") {
         void fetch("/api/sim/board-meeting", { cache: "no-store" })
           .then(r => r.json())
-          .then((data: { meeting: { day: number } | null }) => setBoardPending(data.meeting !== null));
+          .then((data) => setBoardPending((data as { meeting: { day: number } | null }).meeting !== null));
       }
       if (event.eventType === "settlement") setBoardPending(false);
     },
@@ -66,11 +66,11 @@ export function SimControlBar() {
   return (
     <div className="flex items-center gap-2">
       <span className={cn(
-        "relative overflow-hidden rounded px-2 py-0.5 text-[10px] font-bold uppercase",
-        isRunning           ? "bg-mint text-white shadow-[0_0_18px_rgba(46,158,107,0.35)]" :
+        "relative overflow-hidden px-2 py-0.5 text-[9px] font-bold uppercase tracking-[0.2em]",
+        isRunning           ? "bg-mint text-white" :
         sim?.status === "paused" ? "bg-signal text-ink" :
         boardPending        ? "bg-amber-400 text-amber-900" :
-        "bg-paper/15 text-paper/50"
+        "bg-paper/12 text-paper/45"
       )}>
         {isRunning && <span className="absolute inset-y-0 left-0 w-8 animate-time-sweep bg-white/25" />}
         {boardPending && !isRunning ? "待决策" : (sim?.status ?? "…")}
@@ -80,7 +80,7 @@ export function SimControlBar() {
         disabled={!canRun}
         title={boardPending ? "请先完成董事会决策" : "推进 1 天"}
         className={cn(
-          "relative flex items-center gap-1 overflow-hidden rounded px-2.5 py-1 text-[11px] font-bold transition-opacity",
+          "relative flex items-center gap-1 overflow-hidden px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.15em] transition-opacity",
           canRun ? "bg-signal text-ink hover:bg-signal/80" :
           isRunning ? "border border-mint/40 bg-mint/15 text-paper/70 cursor-wait" :
           "bg-signal/30 text-ink/40 cursor-not-allowed"
@@ -133,7 +133,7 @@ function DayCalendarPicker({
       <button
         onClick={() => setOpen(o => !o)}
         className={cn(
-          "flex items-center gap-1.5 rounded border px-2.5 py-1 text-xs font-medium transition-colors select-none",
+          "flex items-center gap-1.5 border px-2.5 py-1 text-xs font-medium transition-colors select-none",
           open
             ? "border-paper/40 bg-paper/20 text-paper"
             : isLive
@@ -148,7 +148,7 @@ function DayCalendarPicker({
 
       {/* Calendar popup */}
       {open && (
-        <div className="rdp-dark absolute right-0 top-full z-50 mt-1.5 rounded-xl border border-white/10 bg-[#1c2434] p-1 shadow-2xl shadow-black/60">
+        <div className="rdp-dark absolute right-0 top-full z-50 mt-1.5 border border-white/10 bg-[#1c2434] p-1 shadow-2xl shadow-black/60">
           <DayPicker
             mode="single"
             locale={zhCN}
@@ -189,8 +189,9 @@ export function DaySwitcher({ days }: { days: { day: number; isBoardDay: boolean
   useEffect(() => {
     fetch("/api/sim/status", { cache: "no-store" })
       .then(r => r.ok ? r.json() : null)
-      .then((status: SimStatusSnapshot | null) => {
-        setRunningDay(status?.status === "running" ? status.day : null);
+      .then((status) => {
+        const simStatus = status as SimStatusSnapshot | null;
+        setRunningDay(simStatus?.status === "running" ? simStatus.day : null);
       });
   }, []);
 
@@ -202,7 +203,7 @@ export function DaySwitcher({ days }: { days: { day: number; isBoardDay: boolean
       if (event.eventType !== "settlement") return;
       void fetch("/api/days", { cache: "no-store" })
         .then(r => r.json())
-        .then((data: { days: { day: number; isBoardDay: boolean }[] }) => setLiveDays(data.days ?? []));
+        .then((data) => setLiveDays(((data as { days: { day: number; isBoardDay: boolean }[] }).days) ?? []));
     },
   });
 
@@ -232,7 +233,7 @@ export function DaySwitcher({ days }: { days: { day: number; isBoardDay: boolean
       {prev ? (
         <button
           onClick={() => go(prev.day)}
-          className="rounded border border-paper/20 px-2 py-1 text-[11px] text-paper/60 hover:border-paper/40 hover:text-paper transition-colors"
+          className="border border-paper/20 px-2 py-1 text-[10px] font-bold uppercase tracking-[0.15em] text-paper/55 hover:border-paper/40 hover:text-paper transition-colors"
         >
           前一天
         </button>
@@ -252,7 +253,7 @@ export function DaySwitcher({ days }: { days: { day: number; isBoardDay: boolean
       {next ? (
         <button
           onClick={() => go(next.day)}
-          className="rounded border border-paper/20 px-2 py-1 text-[11px] text-paper/60 hover:border-paper/40 hover:text-paper transition-colors"
+          className="border border-paper/20 px-2 py-1 text-[10px] font-bold uppercase tracking-[0.15em] text-paper/55 hover:border-paper/40 hover:text-paper transition-colors"
         >
           后一天
         </button>
@@ -307,25 +308,25 @@ export function DashSidebar() {
   }
 
   return (
-    <nav className="flex flex-col gap-4 p-3">
+    <nav className="flex flex-col gap-5 p-4">
       {NAV_GROUPS.map(group => (
         <div key={group.label}>
-          <p className="mb-1.5 px-2 text-[10px] font-bold uppercase tracking-[0.2em] text-ink/35">
+          <p className="mb-2 text-[8px] font-bold uppercase tracking-[0.35em] text-ink/25 px-2">
             {group.label}
           </p>
-          <div className="space-y-0.5">
+          <div className="space-y-px">
             {group.items.map(({ href: h, label, Icon }) => (
               <a
                 key={h}
                 href={href(h)}
                 className={cn(
-                  "flex items-center gap-2.5 rounded px-2.5 py-2 text-sm transition-colors",
+                  "flex items-center gap-2.5 px-2.5 py-2 text-[12px] transition-colors border-l-2",
                   isActive(h)
-                    ? "bg-ink text-paper"
-                    : "text-ink/65 hover:bg-ink/10"
+                    ? "border-ink text-ink font-bold bg-ink/5"
+                    : "border-transparent text-ink/45 hover:text-ink hover:border-ink/30"
                 )}
               >
-                <Icon className="h-4 w-4 shrink-0" />
+                <Icon className="h-3.5 w-3.5 shrink-0" />
                 {label}
               </a>
             ))}

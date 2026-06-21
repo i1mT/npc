@@ -1,10 +1,10 @@
-import { getSimDb } from "@/db/connection";
+import { dbFirst, dbRun } from "@/db/connection";
 
-export function updateDayEditorNote(day: number, editorNote: string) {
-  getSimDb().prepare("UPDATE sim_days SET editor_note = ? WHERE day = ?").run(editorNote, day);
+export async function updateDayEditorNote(day: number, editorNote: string) {
+  await dbRun("UPDATE sim_days SET editor_note = ? WHERE day = ?", editorNote, day);
 }
 
-export function getDayEditorNote(day: number) {
-  const row = getSimDb().prepare("SELECT editor_note FROM sim_days WHERE day = ?").get(day) as { editor_note: string | null } | undefined;
+export async function getDayEditorNote(day: number) {
+  const row = await dbFirst<{ editor_note: string | null }>("SELECT editor_note FROM sim_days WHERE day = ?", day);
   return row?.editor_note ?? null;
 }

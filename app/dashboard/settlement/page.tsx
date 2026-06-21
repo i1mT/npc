@@ -1,12 +1,11 @@
 import { listDays } from "@/db/sim";
-import { getSimDb } from "@/db/connection";
 import { dayToShortDate } from "@/lib/dates";
 import { redirect } from "next/navigation";
 
 export const dynamic = "force-dynamic";
 
-export default function SettlementIndexPage() {
-  const days = listDays();
+export default async function SettlementIndexPage() {
+  const days = await listDays();
 
   if (days.length === 0) {
     return (

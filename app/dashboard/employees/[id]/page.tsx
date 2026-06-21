@@ -1,4 +1,4 @@
-import { getSimDb } from "@/db/connection";
+import { dbAll, dbFirst } from "@/db/connection";
 import type { RoleTemplateName } from "@/mastra/role-templates";
 import { TOOL_META } from "@/mastra/tools/npc-tools";
 import type { ToolName } from "@/mastra/tools/npc-tools";
@@ -61,39 +61,46 @@ export default async function EmployeePage({
 }) {
   const { id } = await params;
   const query = searchParams ? await searchParams : {};
-  const db = getSimDb();
-  const latestDay = (db.prepare("SELECT COALESCE(MAX(day), 0) AS day FROM sim_days").get() as { day: number }).day;
+  const latestDay = (await dbFirst<{ day: number }>("SELECT COALESCE(MAX(day), 0) AS day FROM sim_days"))?.day ?? 0;
   const selectedDay = Number(query.day ?? latestDay);
 
-  const employee = db.prepare(
-    "SELECT id, display_name, role_template, status, joined_day, left_day, system_prompt, soul, tools_granted, memory, agent_handle, daily_salary FROM employees WHERE id = ? OR agent_handle = ?"
-  ).get(id, id) as {
+  const employee = await dbFirst<{
     id: string; display_name: string; role_template: RoleTemplateName;
     status: string; joined_day: number; left_day: number | null;
     system_prompt: string | null; soul: string | null;
     tools_granted: string | null; memory: string | null;
     agent_handle: string; daily_salary: number | null;
-  } | undefined;
+  }>(
+    "SELECT id, display_name, role_template, status, joined_day, left_day, system_prompt, soul, tools_granted, memory, agent_handle, daily_salary FROM employees WHERE id = ? OR agent_handle = ?"
+    ,
+    id,
+    id,
+  );
 
   if (!employee) notFound();
 
   const snapshot = selectedDay > 0
-    ? db.prepare(
+    ? await dbFirst<{ day: number; soul_md: string; memory_md: string }>(
       `SELECT day, soul_md, memory_md
        FROM employee_soul_snapshots
        WHERE employee_id = ? AND day <= ?
        ORDER BY day DESC
        LIMIT 1`,
-    ).get(employee.id, selectedDay) as { day: number; soul_md: string; memory_md: string } | undefined
+      employee.id,
+      selectedDay,
+    )
     : undefined;
 
-  const recentEvents = db.prepare(
+  const recentEvents = await dbAll<{ id: string; day: number; seq: number; event_type: string; content: string }>(
     `SELECT id, day, seq, event_type, substr(content, 1, 200) AS content
      FROM work_events
      WHERE actor_id = ? AND (? <= 0 OR day <= ?)
      ORDER BY day DESC, seq DESC
      LIMIT 30`,
-  ).all(employee.agent_handle, selectedDay, selectedDay) as { id: string; day: number; seq: number; event_type: string; content: string }[];
+    employee.agent_handle,
+    selectedDay,
+    selectedDay,
+  );
 
   // Parse granted tools from JSON
   let grantedTools: ToolName[] = [];

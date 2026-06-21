@@ -15,7 +15,7 @@ function WorkInner() {
   useEffect(() => {
     fetch("/api/days", { cache: "no-store" })
       .then(r => r.json())
-      .then((data: { days: DaySummary[] }) => setDays(data.days ?? []));
+      .then((data) => setDays(((data as { days: DaySummary[] }).days) ?? []));
   }, []);
 
   if (days === null) {

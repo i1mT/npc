@@ -1,4 +1,4 @@
-import { getSimDb } from "@/db/connection";
+import { dbAll } from "@/db/connection";
 
 export type TopicPerformance = {
   topic: string;
@@ -7,15 +7,15 @@ export type TopicPerformance = {
   trend: "up" | "down" | "stable";
 };
 
-export function getTopicPerformanceLast7Days(currentDay: number): TopicPerformance[] {
-  const rows = getSimDb()
-    .prepare(
-      `SELECT day, tags, quality_score
-       FROM published_articles
-       WHERE day >= ? AND day < ?
-       ORDER BY day ASC`,
-    )
-    .all(Math.max(1, currentDay - 7), currentDay) as { day: number; tags: string | null; quality_score: number }[];
+export async function getTopicPerformanceLast7Days(currentDay: number): Promise<TopicPerformance[]> {
+  const rows = await dbAll<{ day: number; tags: string | null; quality_score: number }>(
+    `SELECT day, tags, quality_score
+     FROM published_articles
+     WHERE day >= ? AND day < ?
+     ORDER BY day ASC`,
+    Math.max(1, currentDay - 7),
+    currentDay,
+  );
   const byTopic = new Map<string, { scores: number[]; early: number[]; late: number[] }>();
   for (const row of rows) {
     const tags = safeTags(row.tags);

@@ -27,8 +27,9 @@ export default function SystemPage() {
   useEffect(() => {
     fetch("/api/days", { cache: "no-store" })
       .then(r => r.json())
-      .then((data: { days: DaySummary[] }) => {
-        const d = data.days ?? [];
+      .then((data) => {
+        const dayData = data as { days: DaySummary[] };
+        const d = dayData.days ?? [];
         setDays(d);
         if (d.length > 0) setRollbackDay(d[d.length - 1]!.day); // default = earliest completed day
       });

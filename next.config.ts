@@ -1,9 +1,10 @@
 import type { NextConfig } from "next";
-import path from "node:path";
+import { initOpenNextCloudflareForDev } from "@opennextjs/cloudflare";
+
+void initOpenNextCloudflareForDev();
 
 const nextConfig: NextConfig = {
-  serverExternalPackages: ["better-sqlite3", "@mastra/libsql", "@libsql/client", "libsql"],
-  outputFileTracingRoot: path.join(__dirname),
+  outputFileTracingRoot: process.cwd(),
   images: {
     remotePatterns: [
       {

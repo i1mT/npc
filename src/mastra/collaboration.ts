@@ -37,17 +37,17 @@ export type AgentStepResult<T> = {
   trace: Record<string, unknown>;
 };
 
-export function startDailyCollaboration(day: number): CollaborationRuntime {
-  const agents = agentFactory.loadActiveEmployees();
-  agentFactory.getMastraInstance();
+export async function startDailyCollaboration(day: number): Promise<CollaborationRuntime> {
+  const agents = await agentFactory.loadActiveEmployees();
+  await agentFactory.getMastraInstance();
   return {
     threadId: `day-${day}-mastra-${randomUUID().slice(0, 8)}`,
-    runtimeId: agents[0]?.mastraRuntimeId ?? `mastra-runtime-${process.pid}`,
+    runtimeId: agents[0]?.mastraRuntimeId ?? `mastra-runtime-${randomUUID().slice(0, 8)}`,
     agents,
   };
 }
 
-export function say(input: {
+export async function say(input: {
   day: number;
   runtime: CollaborationRuntime;
   agentHandle: string;
@@ -108,7 +108,7 @@ export async function runStructuredStep<T>(input: {
     const text = extractText(output);
     if (!text) throw new Error(`LLM structured response text was empty: ${summarizeOutput(output)}`);
     const data = input.schema.parse(parseStructuredText<T>(text));
-    const event = say({
+    const event = await say({
       day: input.day,
       runtime: input.runtime,
       agentHandle: agent.handle,
@@ -157,7 +157,7 @@ export async function runTextStep(input: {
     } as never);
     const usage = extractUsage(output);
     const text = extractText(output);
-    const event = say({
+    const event = await say({
       day: input.day,
       runtime: input.runtime,
       agentHandle: agent.handle,
@@ -305,7 +305,7 @@ function recordStepError(input: { day: number; runtime: CollaborationRuntime; ag
   const agent = findRuntimeAgent(input.runtime, input.agentHandle);
   return (error: unknown) => {
     const message = error instanceof Error ? error.message : String(error);
-    addLayerEvent({
+    void addLayerEvent({
       day: input.day,
       actorId: agent?.handle ?? input.agentHandle,
       actorName: agent?.displayName ?? input.agentHandle,

@@ -3,7 +3,7 @@ import { employeeExistsByRole, listActiveEmployeeLabels, spawnActiveEmployee } f
 import { updateDayEditorNote } from "@/db/day-notes";
 import { addLayerEvent, ensureBaselineData, getLatestDay, projectDay, recordDailySettlement, upsertDay } from "@/db/sim";
 import type { DayState, PublishedArticle, WorkflowDefinition } from "@/lib/types";
-import { runStructuredStep, runTextStep, startDailyCollaboration } from "@/mastra/collaboration";
+import { runStructuredStep, runTextStep, startDailyCollaboration, type CollaborationRuntime } from "@/mastra/collaboration";
 import { queryArticlesTool } from "@/mastra/tools/article-tools";
 import { publishArticleTool, suspendBoardWorkflowTool } from "@/mastra/tools/sim-tools";
 import { agendaSchema, articleDraftSchema, editorNoteSchema, growthDecisionSchema, reviewSchema, type AgendaOutput, type GrowthDecisionOutput, type ReviewOutput } from "@/mastra/runtime/schemas";
@@ -29,14 +29,14 @@ export const dailyWorkflow: WorkflowDefinition = {
 };
 
 export async function runDailyWorkflow(day: number): Promise<DayState> {
-  ensureBaselineData();
-  const collaboration = startDailyCollaboration(day);
-  const previous = getLatestDay();
+  await ensureBaselineData();
+  const collaboration = await startDailyCollaboration(day);
+  const previous = await getLatestDay();
   const base = previous ? inheritDay(day, previous) : initialDay(day);
   let tokenTotal = 0;
 
   console.log(`[daily-workflow] day ${day} agenda`);
-  const topicHistory = formatTopicHistory(getTopicPerformanceLast7Days(day));
+  const topicHistory = formatTopicHistory(await getTopicPerformanceLast7Days(day));
   const agendaStep = await runStructuredStep<AgendaOutput>({
     day,
     runtime: collaboration,
@@ -153,7 +153,7 @@ export async function runDailyWorkflow(day: number): Promise<DayState> {
     runGrowthDistributionIfAvailable(day, collaboration, publishResult.articles, baseReach),
   ]);
   tokenTotal += stepTokens(publishStep);
-  writeArticleMemory(day, publishResult.articles, publishStep.trace);
+  await writeArticleMemory(day, publishResult.articles, publishStep.trace);
 
   const reach = baseReach + growthReach;
   const dau = nextDAU(base.dau, averageQuality, reach);
@@ -163,7 +163,7 @@ export async function runDailyWorkflow(day: number): Promise<DayState> {
   const subscribers = nextSubscribers(base.subscribers, dau, averageQuality);
   const capital = nextCapital(base.capital, revenue + subscriptionRevenue(subscribers), cost, drafts.length);
   const nextState: DayState = { day, capital, reputation, dau, subscribers, adRevenue: revenue, llmCost: cost, isBoardDay: day % 7 === 0 };
-  upsertDay(nextState);
+  await upsertDay(nextState);
 
   console.log(`[daily-workflow] day ${day} settlement`);
   const settlementStep = await runTextStep({
@@ -184,25 +184,25 @@ export async function runDailyWorkflow(day: number): Promise<DayState> {
     prompt: `今日结算完成：DAU ${dau}，Reputation ${reputation}，广告收入 ¥${revenue}，LLM token ${tokenTotal}。请向团队说明结果和一个明日注意点。`,
   });
   tokenTotal += stepTokens(settlementStep);
-  recordSettlement(day, nextState, previous, settlementStep, averageQuality, reach);
+  await recordSettlement(day, nextState, previous, settlementStep, averageQuality, reach);
   console.log(`[daily-workflow] day ${day} editor-note`);
   await writeEditorNote(day, collaboration, publishResult.articles, averageQuality, dau, reputation);
   console.log(`[daily-workflow] day ${day} growth`);
   await runGrowthProtocol(day, collaboration, { dau, reputation, capital, monthlyRevenue: revenue });
   await writeDailyRuleAndStructureEvents(day, collaboration, publishResult.count, publishResult.articles, publishStep.event, settlementStep.event);
-  projectDay(day);
+  await projectDay(day);
 
   if (nextState.isBoardDay) {
     const weeklyReport = await generateWeeklyReportForBoard(day, collaboration);
     const suspendResult = await suspendBoardWorkflowTool.execute({ day, weeklyReport });
-    logEvent({
+    await logEvent({
       day,
       ...agentMeta("总编"),
       eventType: "board",
       content: `生成董事会周报：${weeklyReport.summary}`,
       metadata: { workflow: boardWorkflow.name, step: "weekly-report", weeklyReport },
     });
-    logEvent({
+    await logEvent({
       day,
       ...agentMeta("董事会"),
       eventType: "board",
@@ -214,7 +214,7 @@ export async function runDailyWorkflow(day: number): Promise<DayState> {
   return nextState;
 }
 
-async function runGrowthDistributionIfAvailable(day: number, runtime: ReturnType<typeof startDailyCollaboration>, articles: PublishedArticle[], baseReach: number) {
+async function runGrowthDistributionIfAvailable(day: number, runtime: CollaborationRuntime, articles: PublishedArticle[], baseReach: number) {
   if (!runtime.agents.some((agent) => agent.roleTemplate === "growth")) return 0;
   const tags = Array.from(new Set(articles.flatMap((article) => article.tags)));
   await runTextStep({
@@ -229,8 +229,8 @@ async function runGrowthDistributionIfAvailable(day: number, runtime: ReturnType
   return Math.round(baseReach * 0.35);
 }
 
-function recordSettlement(day: number, state: DayState, previous: ReturnType<typeof getLatestDay>, settlementStep: { event: { id: string; seq: number }; trace: Record<string, unknown> }, averageQuality: number, reach: number) {
-  const event = addLayerEvent({
+async function recordSettlement(day: number, state: DayState, previous: Awaited<ReturnType<typeof getLatestDay>>, settlementStep: { event: { id: string; seq: number }; trace: Record<string, unknown> }, averageQuality: number, reach: number) {
+  const event = await addLayerEvent({
     day,
     actorId: "editor-in-chief",
     actorName: "总编 Agent",
@@ -241,10 +241,10 @@ function recordSettlement(day: number, state: DayState, previous: ReturnType<typ
     payload: { ...settlementStep.trace, averageQuality, socialReach: reach, capital: state.capital, subscribers: state.subscribers },
     refs: { reply_to: settlementStep.event.id },
   });
-  recordDailySettlement(state, previous, event.id, { averageQuality, socialReach: reach });
+  await recordDailySettlement(state, previous, event.id, { averageQuality, socialReach: reach });
 }
 
-async function writeEditorNote(day: number, runtime: ReturnType<typeof startDailyCollaboration>, articles: PublishedArticle[], averageQuality: number, dau: number, reputation: number) {
+async function writeEditorNote(day: number, runtime: CollaborationRuntime, articles: PublishedArticle[], averageQuality: number, dau: number, reputation: number) {
   const topTags = formatTopTags(articles);
   const noteStep = await runStructuredStep({
     day,
@@ -255,11 +255,11 @@ async function writeEditorNote(day: number, runtime: ReturnType<typeof startDail
     stepKind: "editor-note",
     prompt: editorNotePrompt({ day, topTags, averageScore: averageQuality, dau, reputation }),
   });
-  updateDayEditorNote(day, noteStep.data.note);
+  await updateDayEditorNote(day, noteStep.data.note);
 }
 
-async function runGrowthProtocol(day: number, runtime: ReturnType<typeof startDailyCollaboration>, metrics: { dau: number; reputation: number; capital: number; monthlyRevenue: number }) {
-  const fallbackRole = growthRoleFromThreshold(metrics);
+async function runGrowthProtocol(day: number, runtime: CollaborationRuntime, metrics: { dau: number; reputation: number; capital: number; monthlyRevenue: number }) {
+  const fallbackRole = await growthRoleFromThreshold(metrics);
   const decisionStep = await runStructuredStep<GrowthDecisionOutput>({
     day,
     runtime,
@@ -269,12 +269,12 @@ async function runGrowthProtocol(day: number, runtime: ReturnType<typeof startDa
     stepKind: "growth-check",
     prompt: growthPrompt({
       ...metrics,
-      employees: listActiveEmployeeLabels().map((item) => `${item.display_name}(${item.role_template})`).join("、"),
+      employees: (await listActiveEmployeeLabels()).map((item) => `${item.display_name}(${item.role_template})`).join("、"),
       thresholdHint: growthThresholdHint({ status: "maintain", reason: "pending" }, fallbackRole),
     }),
   });
   const decision = enforceGrowthThreshold(decisionStep.data, fallbackRole);
-  addLayerEvent({
+  await addLayerEvent({
     day,
     actorId: "editor-in-chief",
     actorName: "总编 Agent",
@@ -286,7 +286,7 @@ async function runGrowthProtocol(day: number, runtime: ReturnType<typeof startDa
     refs: { target_table: "growth_signals" },
   });
   if (decision.status === "expand" && decision.newAgentRole) {
-    spawnActiveEmployee({
+    await spawnActiveEmployee({
       day,
       displayName: decision.newAgentName ?? defaultAgentName(decision.newAgentRole),
       roleTemplate: decision.newAgentRole,
@@ -297,8 +297,8 @@ async function runGrowthProtocol(day: number, runtime: ReturnType<typeof startDa
   }
 }
 
-async function writeDailyRuleAndStructureEvents(day: number, runtime: ReturnType<typeof startDailyCollaboration>, articleCount: number, articles: PublishedArticle[], publishEvent: { id: string }, settlementEvent: { id: string }) {
-  addLayerEvent({
+async function writeDailyRuleAndStructureEvents(day: number, runtime: CollaborationRuntime, articleCount: number, articles: PublishedArticle[], publishEvent: { id: string }, settlementEvent: { id: string }) {
+  await addLayerEvent({
     day,
     actorId: "editor-in-chief",
     actorName: "总编 Agent",
@@ -309,7 +309,7 @@ async function writeDailyRuleAndStructureEvents(day: number, runtime: ReturnType
     payload: { ...runtime, articleCount, rules: ["HARD_SOURCE_URL_REQUIRED", "SOFT_DAILY_10_ARTICLES", "SOFT_TITLE_MAX_20"] },
     refs: { target_table: "published_articles", article_ids: articles.map((article) => article.id), reply_to: publishEvent.id },
   });
-  addLayerEvent({
+  await addLayerEvent({
     day,
     actorId: "editor-in-chief",
     actorName: "总编 Agent",
@@ -322,7 +322,7 @@ async function writeDailyRuleAndStructureEvents(day: number, runtime: ReturnType
   });
 }
 
-function inheritDay(day: number, previous: ReturnType<typeof getLatestDay>): DayState {
+function inheritDay(day: number, previous: Awaited<ReturnType<typeof getLatestDay>>): DayState {
   if (!previous) return initialDay(day);
   return { day, capital: previous.capital, reputation: previous.reputation, dau: previous.dau, subscribers: previous.subscribers, adRevenue: previous.adRevenue, llmCost: previous.llmCost, isBoardDay: day % 7 === 0 };
 }
@@ -331,10 +331,10 @@ function initialDay(day: number): DayState {
   return { day, capital: 10000, reputation: 62, dau: 1200, subscribers: 260, adRevenue: 0, llmCost: 0, isBoardDay: day % 7 === 0 };
 }
 
-function growthRoleFromThreshold(metrics: { dau: number; monthlyRevenue: number }): GrowthRole | null {
-  if (metrics.dau > 100000 && !employeeExistsByRole("column")) return "column";
-  if (metrics.monthlyRevenue > 30000 && !employeeExistsByRole("business")) return "business";
-  if (metrics.dau > 10000 && !employeeExistsByRole("growth")) return "growth";
+async function growthRoleFromThreshold(metrics: { dau: number; monthlyRevenue: number }): Promise<GrowthRole | null> {
+  if (metrics.dau > 100000 && !(await employeeExistsByRole("column"))) return "column";
+  if (metrics.monthlyRevenue > 30000 && !(await employeeExistsByRole("business"))) return "business";
+  if (metrics.dau > 10000 && !(await employeeExistsByRole("growth"))) return "growth";
   return null;
 }
 

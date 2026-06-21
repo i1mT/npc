@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getSimDb } from "@/db/connection";
+import { dbFirst } from "@/db/connection";
 
 export const dynamic = "force-dynamic";
 
@@ -15,10 +15,7 @@ type BoardMeetingRow = {
 };
 
 export async function GET() {
-  const db = getSimDb();
-  const row = db
-    .prepare("SELECT * FROM board_meetings WHERE status = 'pending' ORDER BY day DESC LIMIT 1")
-    .get() as BoardMeetingRow | undefined;
+  const row = await dbFirst<BoardMeetingRow>("SELECT * FROM board_meetings WHERE status = 'pending' ORDER BY day DESC LIMIT 1");
 
   if (!row) return NextResponse.json({ meeting: null });
 

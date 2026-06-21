@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getSimDb } from "@/db/connection";
+import { dbAll, dbFirst } from "@/db/connection";
 import { subscriptionRevenue } from "@/simulation/formulas";
 
 export const dynamic = "force-dynamic";
@@ -65,36 +65,35 @@ export async function GET(
     return NextResponse.json({ error: "Invalid day" }, { status: 400 });
   }
 
-  const db = getSimDb();
-
-  const dayRow = db
-    .prepare(
-      `SELECT d.day, d.capital, d.reputation, d.dau, d.subscribers,
-              d.ad_revenue, d.llm_cost, d.labor_cost,
-              COUNT(pa.id) AS article_count
-       FROM sim_days d
-       LEFT JOIN published_articles pa ON pa.day = d.day
-       WHERE d.day = ?
-       GROUP BY d.day`,
-    )
-    .get(day) as {
+  const dayRow = await dbFirst<{
     day: number; capital: number; reputation: number; dau: number;
     subscribers: number; ad_revenue: number; llm_cost: number;
     labor_cost: number; article_count: number;
-  } | undefined;
+  }>(
+    `SELECT d.day, d.capital, d.reputation, d.dau, d.subscribers,
+            d.ad_revenue, d.llm_cost, d.labor_cost,
+            COUNT(pa.id) AS article_count
+     FROM sim_days d
+     LEFT JOIN published_articles pa ON pa.day = d.day
+     WHERE d.day = ?
+     GROUP BY d.day`,
+    day,
+  );
 
   if (!dayRow) {
     return NextResponse.json({ error: "Day not found" }, { status: 404 });
   }
 
-  const prevRow = db
-    .prepare("SELECT capital, reputation, dau, subscribers FROM sim_days WHERE day = ?")
-    .get(day - 1) as { capital: number; reputation: number; dau: number; subscribers: number } | undefined;
+  const prevRow = await dbFirst<{ capital: number; reputation: number; dau: number; subscribers: number }>(
+    "SELECT capital, reputation, dau, subscribers FROM sim_days WHERE day = ?",
+    day - 1,
+  );
 
   // Settlement breakdown (JSON stored during recordDailySettlement)
-  const settlementRow = db
-    .prepare("SELECT revenue_breakdown, cost_breakdown FROM daily_settlement WHERE day = ?")
-    .get(day) as { revenue_breakdown: string; cost_breakdown: string } | undefined;
+  const settlementRow = await dbFirst<{ revenue_breakdown: string; cost_breakdown: string }>(
+    "SELECT revenue_breakdown, cost_breakdown FROM daily_settlement WHERE day = ?",
+    day,
+  );
 
   const revBD = settlementRow ? (JSON.parse(settlementRow.revenue_breakdown) as {
     ad: number; subscription: number; sponsorship: number; gross: number;
@@ -104,17 +103,16 @@ export async function GET(
   }) : null;
 
   // Per-agent token usage
-  const agentTokenRows = db
-    .prepare(
-      `SELECT actor_id, actor_name,
-              SUM(cost_token) AS total_tokens,
-              SUM(cost_yuan)  AS cost_yuan
-       FROM work_events
-       WHERE day = ? AND cost_token > 0
-       GROUP BY actor_id, actor_name
-       ORDER BY total_tokens DESC`,
-    )
-    .all(day) as { actor_id: string; actor_name: string; total_tokens: number; cost_yuan: number }[];
+  const agentTokenRows = await dbAll<{ actor_id: string; actor_name: string; total_tokens: number; cost_yuan: number }>(
+    `SELECT actor_id, actor_name,
+            SUM(cost_token) AS total_tokens,
+            SUM(cost_yuan)  AS cost_yuan
+     FROM work_events
+     WHERE day = ? AND cost_token > 0
+     GROUP BY actor_id, actor_name
+     ORDER BY total_tokens DESC`,
+    day,
+  );
 
   const TOKEN_PRICE = 0.000002; // yuan per token (flat simulation rate)
   const agentTokens: AgentTokenRow[] = agentTokenRows.map(r => ({
@@ -129,17 +127,16 @@ export async function GET(
   const totalTokens = agentTokens.reduce((s, r) => s + r.totalTokens, 0);
 
   // Active employees at this day
-  const empRows = db
-    .prepare(
-      `SELECT id, display_name, role_template, agent_handle, daily_salary, joined_day
-       FROM employees
-       WHERE joined_day <= ? AND status = 'active'
-       ORDER BY joined_day`,
-    )
-    .all(day) as {
+  const empRows = await dbAll<{
     id: string; display_name: string; role_template: string;
     agent_handle: string; daily_salary: number; joined_day: number;
-  }[];
+  }>(
+    `SELECT id, display_name, role_template, agent_handle, daily_salary, joined_day
+     FROM employees
+     WHERE joined_day <= ? AND status = 'active'
+     ORDER BY joined_day`,
+    day,
+  );
 
   const employees: EmployeeSalaryRow[] = empRows.map(e => ({
     id: e.id,
@@ -151,9 +148,10 @@ export async function GET(
   }));
 
   // Average quality from settlement drivers
-  const qualityDriver = db
-    .prepare("SELECT delta FROM settlement_drivers WHERE day = ? AND metric = 'dau' AND factor = 'quality_score'")
-    .get(day) as { delta: number } | undefined;
+  const qualityDriver = await dbFirst<{ delta: number }>(
+    "SELECT delta FROM settlement_drivers WHERE day = ? AND metric = 'dau' AND factor = 'quality_score'",
+    day,
+  );
 
   const adRevenue     = revBD?.ad          ?? dayRow.ad_revenue;
   const subscRev      = revBD?.subscription ?? subscriptionRevenue(dayRow.subscribers);

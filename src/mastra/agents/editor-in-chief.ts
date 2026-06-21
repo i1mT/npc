@@ -1,4 +1,5 @@
 import type { AgentDefinition, PublishedArticle } from "@/lib/types";
+import { evomapExperienceInstruction } from "@/mastra/role-templates";
 
 export const editorInChiefAgent: AgentDefinition = {
   name: "editor-in-chief",
@@ -9,6 +10,7 @@ export const editorInChiefAgent: AgentDefinition = {
     "使命：让中文读者用最少时间读懂全球 AI 最重要的进展。",
     "价值观优先级：用户信任 > 短期收入，内容质量 > 发布速度。",
     "每天制定选题方向、审核 10 篇稿件、判断生长/收缩协议。",
+    evomapExperienceInstruction,
   ].join("\n"),
 };
 

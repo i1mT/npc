@@ -4,26 +4,35 @@ import { SimControlBar, DaySwitcher, DashSidebar } from "@/components/dash-nav";
 
 export const dynamic = "force-dynamic";
 
-export default function DashboardLayout({ children }: { children: React.ReactNode }) {
-  const days = listDays().map(d => ({ day: d.day, isBoardDay: d.isBoardDay }));
+export default async function DashboardLayout({ children }: { children: React.ReactNode }) {
+  const days = (await listDays()).map(d => ({ day: d.day, isBoardDay: d.isBoardDay }));
 
   return (
-    <div className="flex h-screen flex-col overflow-hidden bg-[#f2f1ee] text-ink">
+    <div className="flex h-screen flex-col overflow-hidden bg-paper text-ink">
       {/* ── Global header ── */}
-      <header className="shrink-0 flex items-center justify-between gap-4 border-b border-ink bg-ink px-4 py-2 text-paper">
-        <div className="flex items-center gap-3">
-          <a href="/dashboard" className="text-xs font-black uppercase tracking-[0.3em] text-signal hover:opacity-80">
-            AGI DAILY NPC
+      <header className="shrink-0 flex items-center justify-between gap-4 border-b border-ink bg-ink px-5 py-2.5 text-paper">
+        <div className="flex items-center gap-4">
+          <a
+            href="/dashboard"
+            className="font-serif text-base text-paper/80 hover:text-paper transition-colors tracking-tight"
+          >
+            AGI Daily
           </a>
-          <span className="text-paper/20">|</span>
-          <a href="/" target="_blank" className="text-xs text-paper/40 hover:text-paper/70">前台 →</a>
+          <span className="text-paper/15 text-sm">|</span>
+          <a
+            href="/"
+            target="_blank"
+            className="text-[9px] font-bold uppercase tracking-[0.3em] text-paper/25 hover:text-paper/55 transition-colors"
+          >
+            前台 →
+          </a>
         </div>
 
-        <div className="flex items-center gap-4">
+        <div className="flex items-center gap-5">
           <Suspense>
             <SimControlBar />
           </Suspense>
-          <div className="h-4 w-px bg-paper/15" />
+          <div className="h-3 w-px bg-paper/10" />
           <Suspense>
             <DaySwitcher days={days} />
           </Suspense>
@@ -33,14 +42,14 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       {/* ── Body: sidebar + content ── */}
       <div className="flex flex-1 overflow-hidden">
         {/* Left sidebar */}
-        <aside className="w-44 shrink-0 overflow-y-auto border-r border-rule bg-[#eceae6]">
+        <aside className="w-44 shrink-0 overflow-y-auto border-r border-rule bg-paper">
           <Suspense>
             <DashSidebar />
           </Suspense>
         </aside>
 
-        {/* Main content — individual pages manage their own scroll */}
-        <main className="flex-1 overflow-hidden">
+        {/* Main content */}
+        <main className="flex-1 overflow-hidden bg-[#EEEDE9]">
           {children}
         </main>
       </div>

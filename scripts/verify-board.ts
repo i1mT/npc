@@ -2,9 +2,9 @@ import { loadEnvConfig } from "@next/env";
 
 loadEnvConfig(process.cwd());
 
-async function expectBoardError(label: string, fn: () => void, code: string, status: number) {
+async function expectBoardError(label: string, fn: () => Promise<unknown>, code: string, status: number) {
   try {
-    fn();
+    await fn();
   } catch (error) {
     const candidate = error as { code?: string; status?: number };
     if (candidate.code === code && candidate.status === status) {
@@ -20,8 +20,8 @@ async function main() {
   const { getBoardMeeting, listEvents, setStatus } = await import("../src/db/sim");
   const { applyBoardDirective, runDailyWorkflow } = await import("../src/mastra");
 
-  resetSimDb();
-  setStatus("idle");
+  await resetSimDb();
+  await setStatus("idle");
 
   await runDailyWorkflow(1);
   const missing = await expectBoardError("missing day rejected", () => applyBoardDirective(999, "不存在的天"), "day_not_found", 404);
@@ -31,19 +31,19 @@ async function main() {
     await runDailyWorkflow(day);
   }
 
-  const pending = getBoardMeeting(7);
+  const pending = await getBoardMeeting(7);
   if (!pending || pending.status !== "pending") {
     throw new Error("Day 7 board workflow should be pending after suspend.");
   }
 
-  applyBoardDirective(7, "下周增加企业落地专题，降低低来源可信度内容。");
-  const resumed = getBoardMeeting(7);
+  await applyBoardDirective(7, "下周增加企业落地专题，降低低来源可信度内容。");
+  const resumed = await getBoardMeeting(7);
   if (!resumed || resumed.status !== "resumed" || !resumed.directive) {
     throw new Error("Day 7 board workflow should resume after directive.");
   }
 
   const duplicate = await expectBoardError("duplicate directive rejected", () => applyBoardDirective(7, "重复提交"), "board_workflow_already_resumed", 409);
-  const boardEvents = listEvents(7).filter((event) => event.eventType === "board");
+  const boardEvents = (await listEvents(7)).filter((event) => event.eventType === "board");
   if (!boardEvents.some((event) => event.content.includes("workflow.suspend"))) throw new Error("Missing workflow.suspend board event.");
   if (!boardEvents.some((event) => event.content.includes("workflow.resume"))) throw new Error("Missing workflow.resume board event.");
 

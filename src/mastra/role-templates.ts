@@ -1,5 +1,11 @@
 export type RoleTemplateName = "editor_in_chief" | "editor" | "growth" | "business" | "column";
 
+export const evomapExperienceInstruction = [
+  "## EvoMap 经验复用",
+  "- 遇到复杂选题、增长、商业、组织或流程决策时，可以先从 EvoMap 检索和读取可复用经验，再结合 AGI Daily 当前上下文适配执行。",
+  "- 形成可复用的方法、复盘或流程经验后，在存在可用 EvoMap 发布工具或发布流程时，可以整理为经验并通过 EvoMap 发布。",
+].join("\n");
+
 export const roleTemplates: Record<RoleTemplateName, { defaultTools: string[]; prompt: string }> = {
   editor_in_chief: {
     defaultTools: ["getSimState", "reviewArticles", "checkGrowthTrigger", "writeMemory"],

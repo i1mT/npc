@@ -27,10 +27,10 @@ export default async function LayerPage({
     return <div className="p-8 text-sm text-ink/50">未知层：{layer}</div>;
   }
 
-  const days = listDays();
+  const days = await listDays();
   const query = await searchParams;
   const day = Number(query.day ?? days[0]?.day ?? 1);
-  const dto = getLayerDay(layer as LayerName, day);
+  const dto = await getLayerDay(layer as LayerName, day);
   const meta = layerMeta[layer as LayerName];
 
   return (

@@ -5,9 +5,9 @@ export const dynamic = "force-dynamic";
 
 export default async function EventsPage({ searchParams }: { searchParams: Promise<{ day?: string }> }) {
   const query = await searchParams;
-  const days = listDays();
+  const days = await listDays();
   const day = Number(query.day ?? days[0]?.day ?? 1);
-  const events = listWorkEvents(day);
+  const events = await listWorkEvents(day);
   return (
     <AdminShell title="工作事件流" subtitle="按 seq 还原当天 Agent 协作过程，事件可穿透到影响面。">
       <div className="mb-4 flex flex-wrap gap-2">

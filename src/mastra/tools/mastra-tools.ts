@@ -30,9 +30,9 @@ function ctx() {
   return c;
 }
 
-function logToolEvent(tool: string, input: string, result: string) {
+async function logToolEvent(tool: string, input: string, result: string) {
   const c = ctx();
-  logEvent({
+  await logEvent({
     day: c.day,
     agentId: c.agentHandle,
     agentName: c.agentName,
@@ -52,12 +52,12 @@ export const fetchArticlesTool = createTool({
   }),
   execute: async (args: { limit?: number }) => {
     const c = ctx();
-    const articles = queryArticles({
+    const articles = await queryArticles({
       day: c.day,
       limit: args.limit ?? 30,
-      usedSourceIds: usedSourceIds(),
+      usedSourceIds: await usedSourceIds(),
     });
-    logToolEvent("fetch_articles", `day=${c.day} limit=${args.limit ?? 30}`, `返回 ${articles.length} 篇候选`);
+    await logToolEvent("fetch_articles", `day=${c.day} limit=${args.limit ?? 30}`, `返回 ${articles.length} 篇候选`);
     return articles.map(a => ({
       id: a.id,
       title: a.title,
@@ -100,14 +100,14 @@ export const publishArticlesTool = createTool({
       tags: a.tags,
       imageUrl: null as string | null,
     }));
-    const published = dbPublishArticles(toPublish);
+    const published = await dbPublishArticles(toPublish);
     const titles = published.map(a => a.titleZh);
     const totalQuality = published.reduce((s, a) => s + a.qualityScore, 0);
     c.published.done = true;
     c.published.count = published.length;
     c.published.titles = titles;
     c.published.totalQuality = totalQuality;
-    logToolEvent("publish_articles", `${toPublish.length} 篇`, `已发布 ${published.length} 篇：${titles.slice(0, 3).join("、")}…`);
+    await logToolEvent("publish_articles", `${toPublish.length} 篇`, `已发布 ${published.length} 篇：${titles.slice(0, 3).join("、")}…`);
     return { count: published.length, titles };
   },
 });
@@ -120,8 +120,8 @@ export const getMetricsTool = createTool({
   inputSchema: z.object({}),
   execute: async (_args: Record<string, never>) => {
     const c = ctx();
-    const row = getLatestDay();
-    logToolEvent("get_metrics", `day=${c.day}`, row ? `DAU ${row.dau} 声誉 ${row.reputation.toFixed(1)} 资金 ¥${Math.round(row.capital)}` : "暂无数据");
+    const row = await getLatestDay();
+    await logToolEvent("get_metrics", `day=${c.day}`, row ? `DAU ${row.dau} 声誉 ${row.reputation.toFixed(1)} 资金 ¥${Math.round(row.capital)}` : "暂无数据");
     if (!row) return null;
     return { day: row.day, dau: row.dau, reputation: row.reputation, capital: row.capital, subscribers: row.subscribers };
   },
@@ -137,8 +137,8 @@ export const readMemoryTool = createTool({
   }),
   execute: async (args: { days?: number }) => {
     const c = ctx();
-    const topics = getTopicPerformanceLast7Days(c.day);
-    logToolEvent("read_memory", `最近 ${args.days ?? 7} 天`, `得到 ${topics.length} 个话题表现记录`);
+    const topics = await getTopicPerformanceLast7Days(c.day);
+    await logToolEvent("read_memory", `最近 ${args.days ?? 7} 天`, `得到 ${topics.length} 个话题表现记录`);
     return topics.slice(0, 20);
   },
 });
@@ -154,7 +154,7 @@ export const writeMemoryTool = createTool({
   execute: async (args: { entries: string[] }) => {
     const c = ctx();
     for (const entry of args.entries) {
-      logEvent({
+      await logEvent({
         day: c.day,
         agentId: c.agentHandle,
         agentName: c.agentName,

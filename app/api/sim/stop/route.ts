@@ -4,6 +4,6 @@ import { simClock } from "@/simulation/engine";
 export const dynamic = "force-dynamic";
 
 export async function POST() {
-  simClock.stop();
-  return NextResponse.json(simClock.getStatus());
+  await simClock.stop();
+  return NextResponse.json(await simClock.getStatus());
 }

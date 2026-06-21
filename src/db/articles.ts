@@ -1,4 +1,4 @@
-import { getArticleDb } from "@/db/connection";
+import { dbAll, dbFirst } from "@/db/connection";
 import { articleSourceDate } from "@/lib/dates";
 import type { ArticleSource } from "@/lib/types";
 
@@ -94,25 +94,24 @@ function extractCoverImage(html: string | null, markdown: string | null): string
  * Uses the calendar date of the previous day relative to the simulation day,
  * so Day 1 (2026-06-01) pulls items published on 2026-05-31.
  */
-export function queryArticles(options: { day: number; limit?: number; usedSourceIds?: string[] }) {
-  const db = getArticleDb();
+export async function queryArticles(options: { day: number; limit?: number; usedSourceIds?: string[] }) {
   const limit = options.limit ?? 30;
   const sourceDate = articleSourceDate(options.day); // e.g. "2026-05-31"
   const blocked = new Set(options.usedSourceIds ?? []);
 
-  const rows = db
-    .prepare(
-      `SELECT id, url, source_url, title, summary, content, image_url, cover_img, tags, pub_date, translations
-       FROM items
-       WHERE source_url IS NOT NULL
-         AND COALESCE(title, '') <> ''
-         AND COALESCE(summary, content, '') <> ''
-         AND LENGTH(COALESCE(summary, content, '')) > 60
-         AND DATE(pub_date) = ?
-       ORDER BY COALESCE(pub_date, fetched_at) DESC
-       LIMIT ?`,
-    )
-    .all(sourceDate, limit + blocked.size + 20) as ArticleRow[];
+  const rows = await dbAll<ArticleRow>(
+    `SELECT id, url, source_url, title, summary, content, image_url, cover_img, tags, pub_date, translations
+     FROM items
+     WHERE source_url IS NOT NULL
+       AND COALESCE(title, '') <> ''
+       AND COALESCE(summary, content, '') <> ''
+       AND LENGTH(COALESCE(summary, content, '')) > 60
+       AND DATE(pub_date) = ?
+     ORDER BY COALESCE(pub_date, fetched_at) DESC
+     LIMIT ?`,
+    sourceDate,
+    limit + blocked.size + 20,
+  );
 
   return rows
     .filter((row) => !blocked.has(row.id))
@@ -121,28 +120,44 @@ export function queryArticles(options: { day: number; limit?: number; usedSource
       return text.length > 80 && !/^comments$/i.test(text);
     })
     .slice(0, limit)
-    .map<ArticleSource>((row) => {
-      const localized = extractLocalized(row);
-      // Use dedicated image columns first, then extract from content HTML/markdown
-      const imageUrl =
-        row.cover_img ||
-        row.image_url ||
-        extractCoverImage(row.content, (localized.translations?.["zh-CN"] as Record<string,unknown> | undefined)?.content as string | null ?? null);
-      return {
-        id: row.id,
-        sourceUrl: row.url || row.source_url,
-        title: localized.title,
-        summary: localized.summary,
-        content: localized.content,
-        imageUrl: imageUrl ?? null,
-        tags: normalizeTags(row.tags),
-        pubDate: row.pub_date,
-        translations: localized.translations,
-      };
-    });
+    .map<ArticleSource>(mapArticleRow);
 }
 
-export function countSourceArticles() {
-  const db = getArticleDb();
-  return (db.prepare("SELECT COUNT(*) AS count FROM items").get() as { count: number }).count;
+export async function getArticleSourcesByIds(ids: string[]) {
+  const uniqueIds = [...new Set(ids.filter(Boolean))];
+  if (!uniqueIds.length) return new Map<string, ArticleSource>();
+
+  const placeholders = uniqueIds.map(() => "?").join(",");
+  const rows = await dbAll<ArticleRow>(
+    `SELECT id, url, source_url, title, summary, content, image_url, cover_img, tags, pub_date, translations
+     FROM items
+     WHERE id IN (${placeholders})`,
+    ...uniqueIds,
+  );
+
+  return new Map(rows.map((row) => [row.id, mapArticleRow(row)]));
+}
+
+export async function countSourceArticles() {
+  const row = await dbFirst<{ count: number }>("SELECT COUNT(*) AS count FROM items");
+  return row?.count ?? 0;
+}
+
+function mapArticleRow(row: ArticleRow): ArticleSource {
+  const localized = extractLocalized(row);
+  const imageUrl =
+    row.cover_img ||
+    row.image_url ||
+    extractCoverImage(row.content, (localized.translations?.["zh-CN"] as Record<string, unknown> | undefined)?.content as string | null ?? null);
+  return {
+    id: row.id,
+    sourceUrl: row.url || row.source_url,
+    title: localized.title,
+    summary: localized.summary,
+    content: localized.content,
+    imageUrl: imageUrl ?? null,
+    tags: normalizeTags(row.tags),
+    pubDate: row.pub_date,
+    translations: localized.translations,
+  };
 }

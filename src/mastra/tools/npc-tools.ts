@@ -11,13 +11,13 @@
 import { createTool } from "@mastra/core/tools";
 import { z } from "zod";
 import { randomUUID } from "node:crypto";
-import { queryArticles } from "@/db/articles";
+import { getArticleSourcesByIds, queryArticles } from "@/db/articles";
 import {
   getLatestDay,
   publishArticles as dbPublishArticles,
   usedSourceIds,
 } from "@/db/sim";
-import { getSimDb, upsertSoulSnapshot } from "@/db/connection";
+import { dbAll, dbBatch, dbFirst, dbRun, getDb, upsertSoulSnapshot } from "@/db/connection";
 import { getTopicPerformanceLast7Days } from "@/db/memory-queries";
 import { logEvent } from "@/simulation/mock-apis";
 import type { CollaborationRuntime } from "@/mastra/collaboration";
@@ -27,6 +27,7 @@ import {
   EVOMAP_TOOL_NAMES,
   type EvomapToolName,
 } from "@/mastra/tools/evomap/tools";
+import { selectPublishImageUrl } from "@/mastra/tools/cover-images";
 
 // ─── Context type ─────────────────────────────────────────────────────────────
 
@@ -41,8 +42,8 @@ export type AgentToolCtx = {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-function log(ctx: AgentToolCtx, tool: string, input: string, result: string) {
-  logEvent({
+async function log(ctx: AgentToolCtx, tool: string, input: string, result: string) {
+  await logEvent({
     day: ctx.day,
     agentId: ctx.agentHandle,
     agentName: ctx.agentName,
@@ -52,12 +53,13 @@ function log(ctx: AgentToolCtx, tool: string, input: string, result: string) {
   });
 }
 
-function snapshotSoulMemory(ctx: AgentToolCtx) {
-  const row = getSimDb()
-    .prepare("SELECT id, soul, memory FROM employees WHERE agent_handle = ?")
-    .get(ctx.agentHandle) as { id: string; soul: string | null; memory: string | null } | undefined;
+async function snapshotSoulMemory(ctx: AgentToolCtx) {
+  const row = await dbFirst<{ id: string; soul: string | null; memory: string | null }>(
+    "SELECT id, soul, memory FROM employees WHERE agent_handle = ?",
+    ctx.agentHandle,
+  );
   if (!row) return;
-  upsertSoulSnapshot(row.id, ctx.day, row.soul ?? "", row.memory ?? "");
+  await upsertSoulSnapshot(row.id, ctx.day, row.soul ?? "", row.memory ?? "");
 }
 
 // ─── Content tools ─────────────────────────────────────────────────────────────
@@ -70,12 +72,12 @@ function makeFetchArticles(ctx: AgentToolCtx) {
       limit: z.number().min(5).max(50).optional().describe("最多返回篇数，默认 30"),
     }),
     execute: async (args: { limit?: number }) => {
-      const articles = queryArticles({
+      const articles = await queryArticles({
         day: ctx.day,
         limit: args.limit ?? 30,
-        usedSourceIds: usedSourceIds(),
+        usedSourceIds: await usedSourceIds(),
       });
-      log(ctx, "fetch_articles", `limit=${args.limit ?? 30}`, `返回 ${articles.length} 篇候选`);
+      await log(ctx, "fetch_articles", `limit=${args.limit ?? 30}`, `返回 ${articles.length} 篇候选`);
       return articles.map(a => ({
         id: a.id,           // ← publish_articles 的 sourceId 必须用这个值，不要用 URL
         title: a.title,
@@ -94,32 +96,41 @@ const articleSchema = z.object({
   qualityScore:  z.number().min(1).max(10).describe("质量评分 1-10"),
   qualityReason: z.string().max(150).optional().describe("评分理由一句话"),
   tags:          z.array(z.string()).max(5).describe("内容标签"),
+  imageUrl:      z.string().url().optional().describe("可选封面图 URL；只在原文没有封面图时作为 Tavily 候选图使用"),
 });
 
 function makePublishArticles(ctx: AgentToolCtx) {
   return createTool({
     id: "publish_articles",
-    description: "发布审核通过的文章到今日日报。总编批准后由编辑调用，一次性提交 8-10 篇。",
+    description: "发布审核通过的文章到今日日报。总编批准后由编辑调用，一次性提交恰好 10 篇。",
     inputSchema: z.object({
-      articles: z.array(articleSchema).min(6).max(12),
+      articles: z.array(articleSchema).length(10),
     }),
     execute: async (args: { articles: Array<z.infer<typeof articleSchema>> }) => {
       const valid = args.articles.filter(
         a => a.sourceId.length > 10 && !a.sourceId.startsWith("http"),
       );
+      if (valid.length !== 10) {
+        throw new Error(`publish_articles requires exactly 10 valid sourceId values, got ${valid.length}.`);
+      }
+      const sourceById = await getArticleSourcesByIds(valid.map(a => a.sourceId));
       const toPublish = valid.map(a => ({
         day: ctx.day,
         sourceId: a.sourceId,
-        sourceUrl: "",
+        sourceUrl: sourceById.get(a.sourceId)?.sourceUrl ?? "",
         titleZh: a.titleZh,
         summaryZh: a.summaryZh,
         contentZh: a.contentZh,
         qualityScore: a.qualityScore,
         qualityReason: a.qualityReason ?? "",
         tags: a.tags,
-        imageUrl: null as string | null,
+        imageUrl: selectPublishImageUrl({
+          sourceId: a.sourceId,
+          sourceImageUrl: sourceById.get(a.sourceId)?.imageUrl,
+          submittedImageUrl: a.imageUrl,
+        }),
       }));
-      const published = dbPublishArticles(toPublish);
+      const published = await dbPublishArticles(toPublish);
       const titles = published.map(a => a.titleZh);
       const totalQuality = published.reduce((s, a) => s + a.qualityScore, 0);
       ctx.published.done = true;
@@ -129,7 +140,7 @@ function makePublishArticles(ctx: AgentToolCtx) {
       const articleCards = published.map(a => ({
         id: a.id, titleZh: a.titleZh, summaryZh: a.summaryZh, qualityScore: a.qualityScore, tags: a.tags,
       }));
-      logEvent({
+      await logEvent({
         day: ctx.day, agentId: ctx.agentHandle, agentName: ctx.agentName,
         eventType: "tool_call",
         content: `发布 ${published.length} 篇文章`,
@@ -151,11 +162,11 @@ function makeGetMetrics(ctx: AgentToolCtx) {
     description: "查看公司当前核心经营指标：DAU、声誉值、资金余额、订阅人数、广告收入等。",
     inputSchema: z.object({}),
     execute: async (_: Record<string, never>) => {
-      const row = getLatestDay();
+      const row = await getLatestDay();
       const summary = row
         ? `DAU ${row.dau} 声誉 ${row.reputation.toFixed(1)} 资金 ¥${Math.round(row.capital)} 订阅 ${row.subscribers}`
         : "暂无数据";
-      log(ctx, "get_metrics", "", summary);
+      await log(ctx, "get_metrics", "", summary);
       if (!row) return null;
       return {
         day: row.day,
@@ -178,15 +189,15 @@ function makeGetRevenue(ctx: AgentToolCtx) {
       days: z.number().min(1).max(30).optional().describe("回溯天数，默认 7"),
     }),
     execute: async (args: { days?: number }) => {
-      const db = getSimDb();
       const n = args.days ?? 7;
-      const rows = db
-        .prepare("SELECT day, ad_revenue, llm_cost, reputation FROM sim_days ORDER BY day DESC LIMIT ?")
-        .all(n) as { day: number; ad_revenue: number; llm_cost: number; reputation: number }[];
+      const rows = await dbAll<{ day: number; ad_revenue: number; llm_cost: number; reputation: number }>(
+        "SELECT day, ad_revenue, llm_cost, reputation FROM sim_days ORDER BY day DESC LIMIT ?",
+        n,
+      );
       const totalRevenue = rows.reduce((s, r) => s + r.ad_revenue, 0);
       const totalCost = rows.reduce((s, r) => s + r.llm_cost, 0);
       const summary = `近 ${n} 天：总收入 ¥${totalRevenue.toFixed(0)}  总成本 ¥${totalCost.toFixed(0)}`;
-      log(ctx, "get_revenue", `days=${n}`, summary);
+      await log(ctx, "get_revenue", `days=${n}`, summary);
       return { days: rows, totalRevenue, totalCost, netIncome: totalRevenue - totalCost };
     },
   });
@@ -202,11 +213,10 @@ function makeReadMemory(ctx: AgentToolCtx) {
     description: "读取自己的工作记忆（过去积累的洞察、策略、经验）以及近期话题表现数据。",
     inputSchema: z.object({}),
     execute: async (_: Record<string, never>) => {
-      const db = getSimDb();
-      const emp = db.prepare("SELECT memory FROM employees WHERE agent_handle = ?").get(ctx.agentHandle) as { memory: string | null } | null;
+      const emp = await dbFirst<{ memory: string | null }>("SELECT memory FROM employees WHERE agent_handle = ?", ctx.agentHandle);
       const personalMemory = emp?.memory ?? "（暂无记忆）";
-      const topics = getTopicPerformanceLast7Days(ctx.day);
-      log(ctx, "read_memory", "", `个人记忆 ${personalMemory.length} 字，话题数据 ${topics.length} 条`);
+      const topics = await getTopicPerformanceLast7Days(ctx.day);
+      await log(ctx, "read_memory", "", `个人记忆 ${personalMemory.length} 字，话题数据 ${topics.length} 条`);
       return { personalMemory, topicPerformance: topics.slice(0, 15) };
     },
   });
@@ -220,17 +230,16 @@ function makeWriteMemory(ctx: AgentToolCtx) {
       memory: z.string().max(MEMORY_MAX_CHARS).describe("完整的新记忆内容（Markdown），包含今日新增洞察和保留的重要历史记忆"),
     }),
     execute: async (args: { memory: string }) => {
-      const db = getSimDb();
       const trimmed = args.memory.slice(0, MEMORY_MAX_CHARS);
-      db.prepare("UPDATE employees SET memory = ? WHERE agent_handle = ?").run(trimmed, ctx.agentHandle);
-      snapshotSoulMemory(ctx);
-      logEvent({
+      await dbRun("UPDATE employees SET memory = ? WHERE agent_handle = ?", trimmed, ctx.agentHandle);
+      await snapshotSoulMemory(ctx);
+      await logEvent({
         day: ctx.day, agentId: ctx.agentHandle, agentName: ctx.agentName,
         eventType: "memory_write",
         content: trimmed.slice(0, 120),
         metadata: { toolSummary: { tool: "write_memory", input: `${trimmed.length} 字`, result: "记忆已更新" } },
       });
-      log(ctx, "write_memory", `${trimmed.length} 字`, "记忆已更新");
+      await log(ctx, "write_memory", `${trimmed.length} 字`, "记忆已更新");
       return { ok: true, chars: trimmed.length, maxChars: MEMORY_MAX_CHARS };
     },
   });
@@ -247,16 +256,15 @@ function makeUpdateMySoul(ctx: AgentToolCtx) {
       reason: z.string().max(150).describe("更新原因，简述什么事件触发了这次进化"),
     }),
     execute: async (args: { soul: string; reason: string }) => {
-      const db = getSimDb();
-      db.prepare("UPDATE employees SET soul = ? WHERE agent_handle = ?").run(args.soul, ctx.agentHandle);
-      snapshotSoulMemory(ctx);
-      logEvent({
+      await dbRun("UPDATE employees SET soul = ? WHERE agent_handle = ?", args.soul, ctx.agentHandle);
+      await snapshotSoulMemory(ctx);
+      await logEvent({
         day: ctx.day, agentId: ctx.agentHandle, agentName: ctx.agentName,
         eventType: "memory_write",
         content: `[Soul 进化] ${args.reason}`,
         metadata: { toolSummary: { tool: "update_my_soul", input: args.reason, result: "soul 已更新" } },
       });
-      log(ctx, "update_my_soul", args.reason, "soul 已更新");
+      await log(ctx, "update_my_soul", args.reason, "soul 已更新");
       return { ok: true };
     },
   });
@@ -270,11 +278,10 @@ function makeListEmployees(ctx: AgentToolCtx) {
     description: "查看当前所有在职员工：姓名、角色、加入日期等。",
     inputSchema: z.object({}),
     execute: async (_: Record<string, never>) => {
-      const db = getSimDb();
-      const rows = db
-        .prepare("SELECT display_name, role_template, agent_handle, joined_day FROM employees WHERE status='active' ORDER BY joined_day")
-        .all() as { display_name: string; role_template: string; agent_handle: string; joined_day: number }[];
-      log(ctx, "list_employees", "", `在职员工 ${rows.length} 人`);
+      const rows = await dbAll<{ display_name: string; role_template: string; agent_handle: string; joined_day: number }>(
+        "SELECT display_name, role_template, agent_handle, joined_day FROM employees WHERE status='active' ORDER BY joined_day",
+      );
+      await log(ctx, "list_employees", "", `在职员工 ${rows.length} 人`);
       return rows;
     },
   });
@@ -298,7 +305,6 @@ function makeHireEmployee(ctx: AgentToolCtx) {
       soul: string;
       reason: string;
     }) => {
-      const db = getSimDb();
       const roleKey = args.role_template as keyof typeof TOOL_GRANTS_BY_ROLE;
       const grantedTools = JSON.stringify(TOOL_GRANTS_BY_ROLE[roleKey] ?? TOOL_GRANTS_BY_ROLE.editor);
       // Use role-consistent handles so @mention routing always works.
@@ -312,11 +318,20 @@ function makeHireEmployee(ctx: AgentToolCtx) {
       };
       const handle = FIXED_HANDLES[args.role_template] ?? `${args.role_template.replace("_", "-")}-${randomUUID().slice(0, 8)}`;
       const id = randomUUID();
-      db.prepare(
+      await dbRun(
         `INSERT INTO employees (id, display_name, role_template, status, joined_day, system_prompt, soul, tools_granted, agent_handle, caused_by_event)
          VALUES (?, ?, ?, 'active', ?, ?, ?, ?, ?, ?)`,
-      ).run(id, args.display_name, args.role_template, ctx.day, args.system_prompt, args.soul, grantedTools, handle, `hire:${ctx.agentHandle}:day${ctx.day}`);
-      logEvent({
+        id,
+        args.display_name,
+        args.role_template,
+        ctx.day,
+        args.system_prompt,
+        args.soul,
+        grantedTools,
+        handle,
+        `hire:${ctx.agentHandle}:day${ctx.day}`,
+      );
+      await logEvent({
         day: ctx.day, agentId: ctx.agentHandle, agentName: ctx.agentName,
         eventType: "org_change",
         content: `招聘 ${args.display_name}（${args.role_template}）— ${args.reason}`,
@@ -336,13 +351,10 @@ function makeFireEmployee(ctx: AgentToolCtx) {
       reason:       z.string().max(150).describe("解雇原因"),
     }),
     execute: async (args: { agent_handle: string; reason: string }) => {
-      const db = getSimDb();
-      const result = db
-        .prepare("UPDATE employees SET status='inactive', left_day=? WHERE agent_handle=? AND status='active'")
-        .run(ctx.day, args.agent_handle);
-      if (result.changes === 0) return { ok: false, error: "未找到该员工或已离职" };
-      const emp = db.prepare("SELECT display_name FROM employees WHERE agent_handle=?").get(args.agent_handle) as { display_name: string } | null;
-      logEvent({
+      const result = await dbRun("UPDATE employees SET status='inactive', left_day=? WHERE agent_handle=? AND status='active'", ctx.day, args.agent_handle);
+      if ((result.meta.changes ?? 0) === 0) return { ok: false, error: "未找到该员工或已离职" };
+      const emp = await dbFirst<{ display_name: string }>("SELECT display_name FROM employees WHERE agent_handle=?", args.agent_handle);
+      await logEvent({
         day: ctx.day,
         agentId: ctx.agentHandle,
         agentName: ctx.agentName,
@@ -367,16 +379,13 @@ function makeUpdateVision(ctx: AgentToolCtx) {
       reason:    z.string().max(150).describe("更新原因"),
     }),
     execute: async (args: { statement: string; values: string[]; reason: string }) => {
-      const db = getSimDb();
-      const existing = db.prepare("SELECT id FROM mission_charter ORDER BY created_at DESC LIMIT 1").get() as { id: string } | null;
+      const existing = await dbFirst<{ id: string }>("SELECT id FROM mission_charter ORDER BY created_at DESC LIMIT 1");
       if (existing) {
-        db.prepare("UPDATE mission_charter SET statement=?, values_json=? WHERE id=?")
-          .run(args.statement, JSON.stringify(args.values), existing.id);
+        await dbRun("UPDATE mission_charter SET statement=?, values_json=? WHERE id=?", args.statement, JSON.stringify(args.values), existing.id);
       } else {
-        db.prepare("INSERT INTO mission_charter (id, statement, values_json, locked, created_at) VALUES (?,?,?,0,datetime('now'))")
-          .run(randomUUID(), args.statement, JSON.stringify(args.values));
+        await dbRun("INSERT INTO mission_charter (id, statement, values_json, locked, created_at) VALUES (?,?,?,0,datetime('now'))", randomUUID(), args.statement, JSON.stringify(args.values));
       }
-      logEvent({
+      await logEvent({
         day: ctx.day,
         agentId: ctx.agentHandle,
         agentName: ctx.agentName,
@@ -400,12 +409,16 @@ function makeUpdateRules(ctx: AgentToolCtx) {
       reason:   z.string().max(100).describe("制定原因"),
     }),
     execute: async (args: { code: string; category: string; text: string; reason: string }) => {
-      const db = getSimDb();
-      db.prepare(
+      await dbRun(
         `INSERT OR REPLACE INTO rules (id, code, category, text, threshold_json, effective_from, status)
          VALUES (?, ?, ?, ?, NULL, ?, 'active')`,
-      ).run(randomUUID(), args.code, args.category, args.text, ctx.day);
-      logEvent({
+        randomUUID(),
+        args.code,
+        args.category,
+        args.text,
+        ctx.day,
+      );
+      await logEvent({
         day: ctx.day,
         agentId: ctx.agentHandle,
         agentName: ctx.agentName,
@@ -426,9 +439,8 @@ function makeGetAdSlots(ctx: AgentToolCtx) {
     description: "查看当前可用的广告位库存及底价，用于制定广告销售策略。",
     inputSchema: z.object({}),
     execute: async (_: Record<string, never>) => {
-      const db = getSimDb();
-      const slots = db.prepare("SELECT slot_code, cpm_base FROM ad_inventory ORDER BY cpm_base DESC").all() as { slot_code: string; cpm_base: number }[];
-      log(ctx, "get_ad_slots", "", `${slots.length} 个广告位`);
+      const slots = await dbAll<{ slot_code: string; cpm_base: number }>("SELECT slot_code, cpm_base FROM ad_inventory ORDER BY cpm_base DESC");
+      await log(ctx, "get_ad_slots", "", `${slots.length} 个广告位`);
       return slots;
     },
   });
@@ -453,13 +465,19 @@ function makeRecordAdSale(ctx: AgentToolCtx) {
       reason: string;
     }) => {
       const revenue = (args.cpm * args.impressions) / 1000;
-      const db = getSimDb();
       const payload = JSON.stringify({ cpm: args.cpm, impressions: args.impressions, reason: args.reason });
-      db.prepare(
+      await dbRun(
         `INSERT INTO ad_placements (id, day, slot_id, advertiser, payload, revenue, caused_by_event)
          VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      ).run(randomUUID(), ctx.day, args.slot_code, args.client_name, payload, revenue, `tool:record_ad_sale:${ctx.agentHandle}`);
-      logEvent({
+        randomUUID(),
+        ctx.day,
+        args.slot_code,
+        args.client_name,
+        payload,
+        revenue,
+        `tool:record_ad_sale:${ctx.agentHandle}`,
+      );
+      await logEvent({
         day: ctx.day,
         agentId: ctx.agentHandle,
         agentName: ctx.agentName,
@@ -488,7 +506,7 @@ function makeAuthorizeBudget(ctx: AgentToolCtx) {
       reason:  z.string().max(200).describe("必要性说明"),
     }),
     execute: async (args: { item: string; amount: number; reason: string }) => {
-      logEvent({
+      await logEvent({
         day: ctx.day,
         agentId: ctx.agentHandle,
         agentName: ctx.agentName,

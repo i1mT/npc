@@ -35,8 +35,8 @@ export function normalizeDrafts(day: number, drafts: DraftArticle[], sources: Ar
   });
 }
 
-export function writeArticleMemory(day: number, articles: PublishedArticle[], trace: Record<string, unknown>) {
-  for (const article of articles) {
+export async function writeArticleMemory(day: number, articles: PublishedArticle[], trace: Record<string, unknown>) {
+  await Promise.all(articles.map((article) =>
     addLayerEvent({
       day,
       actorId: "editor",
@@ -47,8 +47,8 @@ export function writeArticleMemory(day: number, articles: PublishedArticle[], tr
       content: `写入文章记忆：${article.titleZh}`,
       payload: { ...trace, articleId: article.id, sourceId: article.sourceId, tags: article.tags, qualityScore: article.qualityScore, reason: article.qualityReason },
       refs: { target_table: "published_articles", target_article_id: article.id },
-    });
-  }
+    }),
+  ));
 }
 
 export function averageScore(articles: Omit<PublishedArticle, "id" | "createdAt">[]) {
@@ -69,7 +69,7 @@ function normalizeTitle(day: number, sourceId: string, title: string) {
   const clean = title.replace(/[!?！？]/g, "").trim();
   if (clean.length <= 20 && clean === title.trim()) return clean;
   const normalized = clean.slice(0, 20);
-  addLayerEvent({
+  void addLayerEvent({
     day,
     actorId: "editor",
     actorName: "编辑 Agent",

@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { getSimDb } from "@/db/connection";
+import { dbAll, dbBatch, dbFirst, dbRun, getDb } from "@/db/connection";
 import { articleCoverUrl } from "@/lib/cover";
 import type { BoardMeeting, BoardMeetingStatus, DayState, DaySummary, EventType, LayerName, PublishedArticle, RuleDefinition, SimEvent, SimStatus, WorkEvent } from "@/lib/types";
 import nameCandidates from "@/mastra/data/employee-name-candidates.json";
@@ -8,9 +8,8 @@ import { AD_CPM_BY_REPUTATION, SUBSCRIPTION_DAILY_PRICE, subscriptionRevenue } f
 const BOOTSTRAP_NAMES: Record<string, string> = {};
 const ALL_NAMES: string[] = nameCandidates.employeeNameCandidates;
 
-function pickBootstrapName(handle: string): string {
-  const db = getSimDb();
-  const existing = db.prepare("SELECT display_name FROM employees WHERE agent_handle = ?").get(handle) as { display_name: string } | undefined;
+async function pickBootstrapName(handle: string): Promise<string> {
+  const existing = await dbFirst<{ display_name: string }>("SELECT display_name FROM employees WHERE agent_handle = ?", handle);
   if (existing) return existing.display_name; // preserve name if already set
   if (BOOTSTRAP_NAMES[handle]) return BOOTSTRAP_NAMES[handle]!;
   const usedNames = new Set(Object.values(BOOTSTRAP_NAMES));
@@ -216,20 +215,23 @@ function mapBoardMeeting(row: BoardMeetingRow): BoardMeeting {
   };
 }
 
-export function getSetting(key: string) {
-  const row = getSimDb().prepare("SELECT value FROM sim_settings WHERE key = ?").get(key) as { value: string } | undefined;
+export async function getSetting(key: string) {
+  const row = await dbFirst<{ value: string }>("SELECT value FROM sim_settings WHERE key = ?", key);
   return row?.value ?? null;
 }
 
-export function setSetting(key: string, value: string) {
-  getSimDb()
-    .prepare("INSERT INTO sim_settings (key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at")
-    .run(key, value, new Date().toISOString());
+export async function setSetting(key: string, value: string) {
+  await dbRun(
+    "INSERT INTO sim_settings (key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+    key,
+    value,
+    new Date().toISOString(),
+  );
 }
 
-export function getStatus(): { day: number; status: SimStatus; state: DayState } {
-  const last = getLatestDay();
-  const status = (getSetting("status") as SimStatus | null) ?? "idle";
+export async function getStatus(): Promise<{ day: number; status: SimStatus; state: DayState }> {
+  const last = await getLatestDay();
+  const status = (await getSetting("status") as SimStatus | null) ?? "idle";
   const state = last
     ? {
         day: last.day,
@@ -245,77 +247,81 @@ export function getStatus(): { day: number; status: SimStatus; state: DayState }
   return { day: state.day, status, state };
 }
 
-export function setStatus(status: SimStatus) {
-  setSetting("status", status);
+export async function setStatus(status: SimStatus) {
+  await setSetting("status", status);
 }
 
-export function getLatestDay() {
-  const row = getSimDb()
-    .prepare(
-      `SELECT d.*, COUNT(a.id) AS article_count
-       FROM sim_days d
-       LEFT JOIN published_articles a ON a.day = d.day
-       GROUP BY d.day
-       ORDER BY d.day DESC
-       LIMIT 1`,
-    )
-    .get() as DayRow | undefined;
+export async function getLatestDay() {
+  const row = await dbFirst<DayRow>(
+    `SELECT d.*, COUNT(a.id) AS article_count
+     FROM sim_days d
+     LEFT JOIN published_articles a ON a.day = d.day
+     GROUP BY d.day
+     ORDER BY d.day DESC
+     LIMIT 1`,
+  );
   return row ? mapDay(row) : null;
 }
 
-export function listDays() {
-  const rows = getSimDb()
-    .prepare(
-      `SELECT d.*, COUNT(a.id) AS article_count
-       FROM sim_days d
-       LEFT JOIN published_articles a ON a.day = d.day
-       GROUP BY d.day
-       ORDER BY d.day DESC`,
-    )
-    .all() as DayRow[];
+export async function listDays() {
+  const rows = await dbAll<DayRow>(
+    `SELECT d.*, COUNT(a.id) AS article_count
+     FROM sim_days d
+     LEFT JOIN published_articles a ON a.day = d.day
+     GROUP BY d.day
+     ORDER BY d.day DESC`,
+  );
   return rows.map(mapDay);
 }
 
-export function getDay(day: number) {
-  const row = getSimDb()
-    .prepare(
-      `SELECT d.*, COUNT(a.id) AS article_count
-       FROM sim_days d
-       LEFT JOIN published_articles a ON a.day = d.day
-       WHERE d.day = ?
-       GROUP BY d.day`,
-    )
-    .get(day) as DayRow | undefined;
+export async function getDay(day: number) {
+  const row = await dbFirst<DayRow>(
+    `SELECT d.*, COUNT(a.id) AS article_count
+     FROM sim_days d
+     LEFT JOIN published_articles a ON a.day = d.day
+     WHERE d.day = ?
+     GROUP BY d.day`,
+    day,
+  );
   return row ? mapDay(row) : null;
 }
 
-export function upsertDay(state: DayState & { laborCost?: number; avgQuality?: number }) {
-  getSimDb()
-    .prepare(
-      `INSERT INTO sim_days (day, capital, reputation, dau, subscribers, ad_revenue, llm_cost, labor_cost, avg_quality, is_board_day, completed_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-       ON CONFLICT(day) DO UPDATE SET
-       capital = excluded.capital,
-       reputation = excluded.reputation,
-       dau = excluded.dau,
-       subscribers = excluded.subscribers,
-       ad_revenue = excluded.ad_revenue,
-       llm_cost = excluded.llm_cost,
-       labor_cost = excluded.labor_cost,
-       avg_quality = excluded.avg_quality,
-       is_board_day = excluded.is_board_day,
-       completed_at = excluded.completed_at`,
-    )
-    .run(state.day, state.capital, state.reputation, state.dau, state.subscribers, state.adRevenue, state.llmCost, state.laborCost ?? 0, state.avgQuality ?? 0, state.isBoardDay ? 1 : 0, new Date().toISOString());
+export async function upsertDay(state: DayState & { laborCost?: number; avgQuality?: number }) {
+  await dbRun(
+    `INSERT INTO sim_days (day, capital, reputation, dau, subscribers, ad_revenue, llm_cost, labor_cost, avg_quality, is_board_day, completed_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(day) DO UPDATE SET
+     capital = excluded.capital,
+     reputation = excluded.reputation,
+     dau = excluded.dau,
+     subscribers = excluded.subscribers,
+     ad_revenue = excluded.ad_revenue,
+     llm_cost = excluded.llm_cost,
+     labor_cost = excluded.labor_cost,
+     avg_quality = excluded.avg_quality,
+     is_board_day = excluded.is_board_day,
+     completed_at = excluded.completed_at`,
+    state.day,
+    state.capital,
+    state.reputation,
+    state.dau,
+    state.subscribers,
+    state.adRevenue,
+    state.llmCost,
+    state.laborCost ?? 0,
+    state.avgQuality ?? 0,
+    state.isBoardDay ? 1 : 0,
+    new Date().toISOString(),
+  );
 }
 
-export function recordDailySettlement(
+export async function recordDailySettlement(
   state: DayState & { laborCost?: number; contractAdRevenue?: number; organicAdRevenue?: number },
   previous: DayState | null,
   causedByEvent: string,
   factors: { averageQuality: number; socialReach: number; readerScore?: number },
 ) {
-  const db = getSimDb();
+  const db = await getDb();
   const contractAd   = Number((state.contractAdRevenue ?? 0).toFixed(2));
   const organicAd    = Number((state.organicAdRevenue ?? state.adRevenue).toFixed(2));
   const subscriptionRev = subscriptionRevenue(state.subscribers);
@@ -324,10 +330,11 @@ export function recordDailySettlement(
   const labor  = state.laborCost ?? 0;
   const netRev = Number((grossRev - state.llmCost - labor - 18 - 12).toFixed(2));
   const cost   = { llm: state.llmCost, fixed: 18, newsletter: 12, labor, promotion: 0, net: netRev };
-  db.prepare(
+  const statements = [
+    db.prepare(
     `INSERT OR REPLACE INTO daily_settlement (day, revenue_breakdown, cost_breakdown, capital_delta, reputation_delta, dau_delta, subscribers_delta, settled_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-  ).run(
+    ).bind(
     state.day,
     JSON.stringify(revenue),
     JSON.stringify(cost),
@@ -336,9 +343,10 @@ export function recordDailySettlement(
     previous ? state.dau - previous.dau : state.dau,
     previous ? state.subscribers - previous.subscribers : state.subscribers,
     new Date().toISOString(),
-  );
+    ),
+  ];
   for (const [metric, value] of Object.entries({ capital: state.capital, reputation: state.reputation, dau: state.dau, subscribers: state.subscribers, ad_revenue: state.adRevenue })) {
-    db.prepare("INSERT OR REPLACE INTO resource_metrics (metric, value, updated_day) VALUES (?, ?, ?)").run(metric, value, state.day);
+    statements.push(db.prepare("INSERT OR REPLACE INTO resource_metrics (metric, value, updated_day) VALUES (?, ?, ?)").bind(metric, value, state.day));
   }
   for (const driver of [
     ["dau", "quality_score", factors.averageQuality],
@@ -346,53 +354,51 @@ export function recordDailySettlement(
     ["reputation", "content_quality", previous ? state.reputation - previous.reputation : state.reputation],
     ["capital", "ad_revenue", state.adRevenue],
   ] as const) {
-    db.prepare("INSERT OR REPLACE INTO settlement_drivers (day, metric, factor, delta, caused_by_event) VALUES (?, ?, ?, ?, ?)").run(state.day, ...driver, causedByEvent);
+    statements.push(db.prepare("INSERT OR REPLACE INTO settlement_drivers (day, metric, factor, delta, caused_by_event) VALUES (?, ?, ?, ?, ?)").bind(state.day, ...driver, causedByEvent));
   }
+  await dbBatch(statements);
 }
 
-export function nextSeq(day: number) {
-  const row = getSimDb().prepare("SELECT COALESCE(MAX(seq), 0) + 1 AS seq FROM work_events WHERE day = ?").get(day) as { seq: number };
-  return row.seq;
+export async function nextSeq(day: number) {
+  const row = await dbFirst<{ seq: number }>("SELECT COALESCE(MAX(seq), 0) + 1 AS seq FROM work_events WHERE day = ?", day);
+  return row?.seq ?? 1;
 }
 
-export function addEvent(input: Omit<SimEvent, "id" | "seq" | "createdAt"> & { costToken?: number; costYuan?: number }) {
-  ensureBaselineData();
+export async function addEvent(input: Omit<SimEvent, "id" | "seq" | "createdAt"> & { costToken?: number; costYuan?: number }) {
+  await ensureBaselineData();
   const now = new Date().toISOString();
   const layer = inferEventLayer(input.eventType, input.agentId);
   const event: SimEvent = {
     ...input,
     id: randomUUID(),
-    seq: nextSeq(input.day),
+    seq: await nextSeq(input.day),
     createdAt: now,
   };
-  getSimDb()
-    .prepare(
-      `INSERT INTO work_events (id, day, seq, ts, actor_id, actor_name, actor_type, layer, event_type, action, content, payload, refs, cost_token, cost_yuan, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    )
-    .run(
-      event.id,
-      event.day,
-      event.seq,
-      now,
-      event.agentId,
-      event.agentName,
-      event.agentId === "board" ? "board" : event.agentId === "simulation-engine" ? "system" : "agent",
-      layer,
-      event.eventType,
-      event.eventType,
-      event.content,
-      event.metadata ? JSON.stringify(event.metadata) : null,
-      null,
-      input.costToken ?? 0,
-      input.costYuan ?? 0,
-      event.createdAt,
-    );
-  projectWorkEvent(event.id);
+  await dbRun(
+    `INSERT INTO work_events (id, day, seq, ts, actor_id, actor_name, actor_type, layer, event_type, action, content, payload, refs, cost_token, cost_yuan, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    event.id,
+    event.day,
+    event.seq,
+    now,
+    event.agentId,
+    event.agentName,
+    event.agentId === "board" ? "board" : event.agentId === "simulation-engine" ? "system" : "agent",
+    layer,
+    event.eventType,
+    event.eventType,
+    event.content,
+    event.metadata ? JSON.stringify(event.metadata) : null,
+    null,
+    input.costToken ?? 0,
+    input.costYuan ?? 0,
+    event.createdAt,
+  );
+  await projectWorkEvent(event.id);
   return event;
 }
 
-export function addLayerEvent(input: {
+export async function addLayerEvent(input: {
   day: number;
   actorId: string;
   actorName: string;
@@ -406,138 +412,133 @@ export function addLayerEvent(input: {
   costToken?: number;
   costYuan?: number;
 }) {
-  ensureBaselineData();
+  await ensureBaselineData();
   const now = new Date().toISOString();
   const id = randomUUID();
-  getSimDb()
-    .prepare(
-      `INSERT INTO work_events (id, day, seq, ts, actor_id, actor_name, actor_type, layer, event_type, action, content, payload, refs, cost_token, cost_yuan, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    )
-    .run(
-      id,
-      input.day,
-      nextSeq(input.day),
-      now,
-      input.actorId,
-      input.actorName,
-      input.actorType ?? "agent",
-      input.layer,
-      input.eventType,
-      input.action,
-      input.content,
-      input.payload ? JSON.stringify(input.payload) : null,
-      input.refs ? JSON.stringify(input.refs) : null,
-      input.costToken ?? 0,
-      input.costYuan ?? 0,
-      now,
-    );
-  projectWorkEvent(id);
-  return getWorkEvent(id)!;
+  await dbRun(
+    `INSERT INTO work_events (id, day, seq, ts, actor_id, actor_name, actor_type, layer, event_type, action, content, payload, refs, cost_token, cost_yuan, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    id,
+    input.day,
+    await nextSeq(input.day),
+    now,
+    input.actorId,
+    input.actorName,
+    input.actorType ?? "agent",
+    input.layer,
+    input.eventType,
+    input.action,
+    input.content,
+    input.payload ? JSON.stringify(input.payload) : null,
+    input.refs ? JSON.stringify(input.refs) : null,
+    input.costToken ?? 0,
+    input.costYuan ?? 0,
+    now,
+  );
+  await projectWorkEvent(id);
+  const event = await getWorkEvent(id);
+  if (!event) throw new Error(`Failed to load work event ${id} after insert.`);
+  return event;
 }
 
-export function listEvents(day: number) {
-  const rows = getSimDb().prepare("SELECT * FROM sim_events WHERE day = ? ORDER BY seq ASC").all(day) as EventRow[];
+export async function listEvents(day: number) {
+  const rows = await dbAll<EventRow>("SELECT * FROM sim_events WHERE day = ? ORDER BY seq ASC", day);
   return rows.map(mapEvent);
 }
 
-export function latestEvents(afterId?: string | null) {
-  const db = getSimDb();
+export async function latestEvents(afterId?: string | null) {
   if (!afterId) {
-    return (db.prepare("SELECT * FROM sim_events ORDER BY created_at DESC, seq DESC LIMIT 50").all() as EventRow[]).reverse().map(mapEvent);
+    return (await dbAll<EventRow>("SELECT * FROM sim_events ORDER BY created_at DESC, seq DESC LIMIT 50")).reverse().map(mapEvent);
   }
-  const marker = db.prepare("SELECT created_at FROM sim_events WHERE id = ?").get(afterId) as { created_at: string } | undefined;
+  const marker = await dbFirst<{ created_at: string }>("SELECT created_at FROM sim_events WHERE id = ?", afterId);
   if (!marker) return [];
-  return (db.prepare("SELECT * FROM sim_events WHERE created_at > ? ORDER BY created_at ASC, seq ASC LIMIT 100").all(marker.created_at) as EventRow[]).map(mapEvent);
+  return (await dbAll<EventRow>("SELECT * FROM sim_events WHERE created_at > ? ORDER BY created_at ASC, seq ASC LIMIT 100", marker.created_at)).map(mapEvent);
 }
 
-export function listPublishedArticles(day: number) {
-  const rows = getSimDb().prepare("SELECT * FROM published_articles WHERE day = ? ORDER BY quality_score DESC, created_at ASC").all(day) as ArticleRow[];
+export async function listPublishedArticles(day: number) {
+  const rows = await dbAll<ArticleRow>("SELECT * FROM published_articles WHERE day = ? ORDER BY quality_score DESC, created_at ASC", day);
   return rows.map(mapArticle);
 }
 
-export function getArticle(id: string): PublishedArticle | null {
-  const row = getSimDb().prepare("SELECT * FROM published_articles WHERE id = ?").get(id) as ArticleRow | undefined;
+export async function getArticle(id: string): Promise<PublishedArticle | null> {
+  const row = await dbFirst<ArticleRow>("SELECT * FROM published_articles WHERE id = ?", id);
   return row ? mapArticle(row) : null;
 }
 
-export function publishArticles(articles: Omit<PublishedArticle, "id" | "createdAt">[]) {
-  const db = getSimDb();
-  const stmt = db.prepare(
-    `INSERT INTO published_articles (id, day, source_id, title_zh, summary_zh, content_zh, source_url, image_url, tags, quality_score, quality_reason, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-  );
+export async function publishArticles(articles: Omit<PublishedArticle, "id" | "createdAt">[]) {
+  const db = await getDb();
   const now = new Date().toISOString();
   const published: PublishedArticle[] = [];
-  const tx = db.transaction(() => {
-    for (const article of articles) {
-      const id = randomUUID();
-      // Fall back to picsum deterministic cover when source has no image
-      const imageUrl = article.imageUrl ?? articleCoverUrl(article.sourceId);
-      stmt.run(id, article.day, article.sourceId, article.titleZh, article.summaryZh, article.contentZh, article.sourceUrl, imageUrl, JSON.stringify(article.tags), article.qualityScore, article.qualityReason, now);
-      published.push({ ...article, id, imageUrl, createdAt: now });
-    }
+  const statements = articles.map((article) => {
+    const id = randomUUID();
+    const imageUrl = article.imageUrl ?? articleCoverUrl(article.sourceId);
+    published.push({ ...article, id, imageUrl, createdAt: now });
+    return db.prepare(
+      `INSERT INTO published_articles (id, day, source_id, title_zh, summary_zh, content_zh, source_url, image_url, tags, quality_score, quality_reason, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).bind(id, article.day, article.sourceId, article.titleZh, article.summaryZh, article.contentZh, article.sourceUrl, imageUrl, JSON.stringify(article.tags), article.qualityScore, article.qualityReason, now);
   });
-  tx();
+  await dbBatch(statements);
   return published;
 }
 
-export function usedSourceIds() {
-  const rows = getSimDb().prepare("SELECT source_id FROM published_articles").all() as { source_id: string }[];
+export async function usedSourceIds() {
+  const rows = await dbAll<{ source_id: string }>("SELECT source_id FROM published_articles");
   return rows.map((row) => row.source_id);
 }
 
-export function addBoardDirective(day: number, directive: string) {
-  getSimDb()
-    .prepare("INSERT INTO board_directives (id, day, directive, applied_at) VALUES (?, ?, ?, ?)")
-    .run(randomUUID(), day, directive, new Date().toISOString());
+export async function addBoardDirective(day: number, directive: string) {
+  await dbRun("INSERT INTO board_directives (id, day, directive, applied_at) VALUES (?, ?, ?, ?)", randomUUID(), day, directive, new Date().toISOString());
 }
 
-export function suspendBoardMeeting(day: number, weeklyReport: Record<string, unknown>) {
+export async function suspendBoardMeeting(day: number, weeklyReport: Record<string, unknown>) {
   const autoDirective = typeof weeklyReport.autoDirective === "string" ? weeklyReport.autoDirective : null;
   const autoDirectiveReason = typeof weeklyReport.autoDirectiveReason === "string" ? weeklyReport.autoDirectiveReason : null;
-  getSimDb()
-    .prepare(
-      `INSERT INTO board_meetings (day, status, weekly_report, auto_directive, auto_directive_reason, directive, suspended_at, resumed_at)
-       VALUES (?, 'pending', ?, ?, ?, NULL, ?, NULL)
-       ON CONFLICT(day) DO UPDATE SET
-       status = 'pending',
-       weekly_report = excluded.weekly_report,
-       auto_directive = excluded.auto_directive,
-       auto_directive_reason = excluded.auto_directive_reason,
-       directive = NULL,
-       suspended_at = excluded.suspended_at,
-       resumed_at = NULL`,
-    )
-    .run(day, JSON.stringify(weeklyReport), autoDirective, autoDirectiveReason, new Date().toISOString());
+  await dbRun(
+    `INSERT INTO board_meetings (day, status, weekly_report, auto_directive, auto_directive_reason, directive, suspended_at, resumed_at)
+     VALUES (?, 'pending', ?, ?, ?, NULL, ?, NULL)
+     ON CONFLICT(day) DO UPDATE SET
+     status = 'pending',
+     weekly_report = excluded.weekly_report,
+     auto_directive = excluded.auto_directive,
+     auto_directive_reason = excluded.auto_directive_reason,
+     directive = NULL,
+     suspended_at = excluded.suspended_at,
+     resumed_at = NULL`,
+    day,
+    JSON.stringify(weeklyReport),
+    autoDirective,
+    autoDirectiveReason,
+    new Date().toISOString(),
+  );
 }
 
-export function getBoardMeeting(day: number) {
-  const row = getSimDb().prepare("SELECT * FROM board_meetings WHERE day = ?").get(day) as BoardMeetingRow | undefined;
+export async function getBoardMeeting(day: number) {
+  const row = await dbFirst<BoardMeetingRow>("SELECT * FROM board_meetings WHERE day = ?", day);
   return row ? mapBoardMeeting(row) : null;
 }
 
-export function resumeBoardMeeting(day: number, directive: string) {
-  getSimDb()
-    .prepare("UPDATE board_meetings SET status = 'resumed', directive = ?, resumed_at = ? WHERE day = ?")
-    .run(directive, new Date().toISOString(), day);
+export async function resumeBoardMeeting(day: number, directive: string) {
+  await dbRun("UPDATE board_meetings SET status = 'resumed', directive = ?, resumed_at = ? WHERE day = ?", directive, new Date().toISOString(), day);
 }
 
-export function ensureBaselineData() {
-  const db = getSimDb();
+export async function ensureBaselineData() {
+  const db = await getDb();
   const now = new Date().toISOString();
-  db.prepare(
-    "INSERT OR IGNORE INTO mission_charter (id, statement, values_json, locked, created_at) VALUES (?, ?, ?, 1, ?)",
-  ).run("charter-default", "让中文读者用最少时间，读懂全球 AI 最重要的进展。", JSON.stringify(["内容质量 > 发布速度", "用户信任 > 短期流量", "长期 Reputation > 单次广告收益"]), now);
-  db.prepare(
-    "INSERT OR IGNORE INTO mission_strategy (id, title, description, effective_from, status) VALUES (?, ?, ?, 1, 'active')",
-  ).run("strategy-stage-1", "专注 AI 研究资讯", "以解释性日报建立中文 AI 资讯信任资产。");
+  const statements = [
+    db.prepare(
+      "INSERT OR IGNORE INTO mission_charter (id, statement, values_json, locked, created_at) VALUES (?, ?, ?, 1, ?)",
+    ).bind("charter-default", "让中文读者用最少时间，读懂全球 AI 最重要的进展。", JSON.stringify(["内容质量 > 发布速度", "用户信任 > 短期流量", "长期 Reputation > 单次广告收益"]), now),
+    db.prepare(
+      "INSERT OR IGNORE INTO mission_strategy (id, title, description, effective_from, status) VALUES (?, ?, ?, 1, 'active')",
+    ).bind("strategy-stage-1", "专注 AI 研究资讯", "以解释性日报建立中文 AI 资讯信任资产。"),
+  ];
   for (const okr of [
     ["okr-dau", "dau", 1000, 10000],
     ["okr-revenue", "monthly_revenue", 5000, 30000],
     ["okr-open-rate", "newsletter_open_rate", 35, null],
   ] as const) {
-    db.prepare("INSERT OR IGNORE INTO mission_okr (id, stage, metric, target, upper_bound, effective_from, status) VALUES (?, 1, ?, ?, ?, 1, 'active')").run(...okr);
+    statements.push(db.prepare("INSERT OR IGNORE INTO mission_okr (id, stage, metric, target, upper_bound, effective_from, status) VALUES (?, 1, ?, ?, ?, 1, 'active')").bind(...okr));
   }
   for (const tool of [
     ["tool-query-articles", "queryArticles", "real_data", "public", "查询 agidaily.db 原始文章池"],
@@ -546,7 +547,7 @@ export function ensureBaselineData() {
     ["tool-social", "sim.social.post", "mock_api", "restricted", "发布社交媒体摘要"],
     ["tool-analytics", "sim.analytics.get", "mock_api", "public", "读取模拟分析指标"],
   ] as const) {
-    db.prepare("INSERT OR IGNORE INTO tool_registry (id, name, kind, scope, description, schema_json, status, created_at) VALUES (?, ?, ?, ?, ?, '{}', 'active', ?)").run(...tool, now);
+    statements.push(db.prepare("INSERT OR IGNORE INTO tool_registry (id, name, kind, scope, description, schema_json, status, created_at) VALUES (?, ?, ?, ?, ?, '{}', 'active', ?)").bind(...tool, now));
   }
   for (const rule of [
     ["rule-source-url", "HARD_SOURCE_URL_REQUIRED", "hard", "不发布无法溯源的信息，必须有 source_url。"],
@@ -554,20 +555,26 @@ export function ensureBaselineData() {
     ["rule-daily-volume", "SOFT_DAILY_10_ARTICLES", "soft", "每期日报固定 10 篇，不多不少。"],
     ["rule-ad-contract", "AUTH_AD_CONTRACT_10000", "authorization", "广告合同单笔 > ¥10,000 必须人工确认。"],
   ] as const) {
-    db.prepare("INSERT OR IGNORE INTO rules (id, code, category, text, threshold_json, effective_from, status) VALUES (?, ?, ?, ?, '{}', 1, 'active')").run(...rule);
+    statements.push(db.prepare("INSERT OR IGNORE INTO rules (id, code, category, text, threshold_json, effective_from, status) VALUES (?, ?, ?, ?, '{}', 1, 'active')").bind(...rule));
   }
-  bootstrapEmployee("editor-in-chief", pickBootstrapName("editor-in-chief"), "editor_in_chief", "editor-in-chief",
-    INITIAL_SYSTEM_PROMPTS.editor_in_chief, INITIAL_SOULS.editor_in_chief, INITIAL_TOOLS.editor_in_chief, 1, "bootstrap");
-  bootstrapEmployee("editor", pickBootstrapName("editor"), "editor", "editor",
-    INITIAL_SYSTEM_PROMPTS.editor, INITIAL_SOULS.editor, INITIAL_TOOLS.editor, 1, "bootstrap");
-  db.prepare("INSERT OR IGNORE INTO org_relations (id, superior_id, subordinate_id, effective_from) VALUES (?, ?, ?, 1)").run("org-editor-chief-editor", "editor-in-chief", "editor");
+  const editorInChiefName = await pickBootstrapName("editor-in-chief");
+  const editorName = await pickBootstrapName("editor");
+  statements.push(
+    bootstrapEmployeeStatement(db, "editor-in-chief", editorInChiefName, "editor_in_chief", "editor-in-chief", INITIAL_SYSTEM_PROMPTS.editor_in_chief, INITIAL_SOULS.editor_in_chief, INITIAL_TOOLS.editor_in_chief, 1, "bootstrap"),
+    bootstrapEmployeeStatement(db, "editor", editorName, "editor", "editor", INITIAL_SYSTEM_PROMPTS.editor, INITIAL_SOULS.editor, INITIAL_TOOLS.editor, 1, "bootstrap"),
+    db.prepare("INSERT OR IGNORE INTO org_relations (id, superior_id, subordinate_id, effective_from) VALUES (?, ?, ?, 1)").bind("org-editor-chief-editor", "editor-in-chief", "editor"),
+  );
+  await dbBatch(statements);
 }
 
 const INITIAL_SYSTEM_PROMPTS: Record<string, string> = {
   editor_in_chief: `负责 AGI Daily 编辑部的日常统筹与内容决策。
 工作职责：
+- 必须以公司的七层约束做决策：使命层、能力层、记忆层、组织层、规则层、资源层、生长协议层
+- 规则层硬约束：每日 AGI Daily 必须恰好发布 10 篇文章，不多不少；少于 10 篇时不能批准发布，必须要求编辑继续补齐
 - 每日开场：了解今日指标和话题趋势，向团队分配任务
 - 审核编辑选送的文章，把控内容质量和选题方向
+- 只有恰好 10 篇且符合规则层约束时才批准发布
 - 调用 get_metrics 了解 DAU/声誉/资金现状
 - 根据指标决定选题策略（深度 vs 广度，热点 vs 长尾）
 - 批准发布后 @编辑 执行；必要时调用 hire_employee 扩编团队`,
@@ -575,7 +582,8 @@ const INITIAL_SYSTEM_PROMPTS: Record<string, string> = {
   editor: `负责 AGI Daily 每日内容的选稿、改写和发布。
 工作职责：
 - 调用 fetch_articles 获取今日候选文章（id 字段是十六进制，发布时必须用这个）
-- 按总编设定的方向筛选 8-10 篇，撰写中文标题和摘要
+- 按总编设定的方向筛选恰好 10 篇，撰写中文标题和摘要
+- 文章封面可以调用 Tavily MCP 的 tavily_search 寻找合适的封面，并在发布时提交合适的 imageUrl
 - 在群聊中向总编报告选稿结果，等待审核批准
 - 总编批准后调用 publish_articles 一次性发布
 - 发布后调用 write_memory 记录今日选题洞察
@@ -608,9 +616,27 @@ const INITIAL_SOULS: Record<string, string> = {
 做事有条理，汇报清晰；对被打回的稿件会认真分析原因；偶尔会对某个技术话题格外兴奋。`,
 };
 
+const EVOMAP_BOOTSTRAP_TOOLS = [
+  "evomap_search_recipes",
+  "evomap_get_recipe_detail",
+  "evomap_list_genes",
+  "evomap_get_gene_detail",
+  "evomap_query_reuse",
+];
+
 const INITIAL_TOOLS: Record<string, string> = {
-  editor_in_chief: JSON.stringify(["fetch_articles", "get_metrics", "read_memory", "write_memory", "update_my_soul", "list_employees", "hire_employee", "authorize_budget"]),
-  editor: JSON.stringify(["fetch_articles", "publish_articles", "read_memory", "write_memory", "update_my_soul"]),
+  editor_in_chief: JSON.stringify([
+    "fetch_articles", "get_metrics",
+    "read_memory", "write_memory", "update_my_soul",
+    "list_employees", "hire_employee",
+    "authorize_budget", "adjust_salary",
+    ...EVOMAP_BOOTSTRAP_TOOLS,
+  ]),
+  editor: JSON.stringify([
+    "fetch_articles", "publish_articles",
+    "read_memory", "write_memory", "update_my_soul",
+    ...EVOMAP_BOOTSTRAP_TOOLS,
+  ]),
 };
 
 const BOOTSTRAP_DAILY_SALARY: Record<string, number> = {
@@ -618,84 +644,111 @@ const BOOTSTRAP_DAILY_SALARY: Record<string, number> = {
   "editor": 300,
 };
 
-function bootstrapEmployee(id: string, name: string, role: string, handle: string, systemPrompt: string, soul: string, toolsGranted: string, day: number, eventId: string) {
+function bootstrapEmployeeStatement(db: Awaited<ReturnType<typeof getDb>>, id: string, name: string, role: string, handle: string, systemPrompt: string, soul: string, toolsGranted: string, day: number, eventId: string) {
   const salary = BOOTSTRAP_DAILY_SALARY[handle] ?? 300;
-  getSimDb()
+  return db
     .prepare("INSERT OR IGNORE INTO employees (id, display_name, role_template, status, joined_day, system_prompt, soul, tools_granted, agent_handle, caused_by_event, daily_salary) VALUES (?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?)")
-    .run(id, name, role, day, systemPrompt, soul, toolsGranted, handle, eventId, salary);
+    .bind(id, name, role, day, systemPrompt, soul, toolsGranted, handle, eventId, salary);
 }
 
-function projectWorkEvent(eventId: string) {
-  const event = getWorkEvent(eventId);
+async function projectWorkEvent(eventId: string) {
+  const event = await getWorkEvent(eventId);
   if (!event || event.layer === "work") return;
-  const db = getSimDb();
+  const db = await getDb();
   const now = new Date().toISOString();
   const entityId = `${event.layer}:day:${event.day}`;
-  const snapshot = buildLayerSnapshot(event.layer, event.day);
-  db.prepare(
-    `INSERT OR REPLACE INTO layer_snapshots (layer, day, entity_id, payload) VALUES (?, ?, ?, ?)`,
-  ).run(event.layer, event.day, entityId, JSON.stringify(snapshot));
-  db.prepare(
-    `INSERT INTO layer_changes (id, layer, day, entity_table, entity_id, change_type, before_json, after_json, caused_by_event, summary, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?)`,
-  ).run(randomUUID(), event.layer, event.day, `${event.layer}_state`, entityId, event.eventType === "tool_call" ? "trigger" : "update", JSON.stringify(snapshot), event.id, event.content, now);
+  const snapshot = await buildLayerSnapshot(event.layer, event.day);
+  await dbBatch([
+    db.prepare(
+      `INSERT OR REPLACE INTO layer_snapshots (layer, day, entity_id, payload) VALUES (?, ?, ?, ?)`,
+    ).bind(event.layer, event.day, entityId, JSON.stringify(snapshot)),
+    db.prepare(
+      `INSERT INTO layer_changes (id, layer, day, entity_table, entity_id, change_type, before_json, after_json, caused_by_event, summary, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?)`,
+    ).bind(randomUUID(), event.layer, event.day, `${event.layer}_state`, entityId, event.eventType === "tool_call" ? "trigger" : "update", JSON.stringify(snapshot), event.id, event.content, now),
+  ]);
 }
 
-export function projectDay(day: number) {
-  ensureBaselineData();
-  const db = getSimDb();
+export async function projectDay(day: number) {
+  await ensureBaselineData();
+  const db = await getDb();
   const now = new Date().toISOString();
   for (const layer of ["mission", "environment", "memory", "structure", "rules", "resource", "growth"] as LayerName[]) {
     const entityId = `${layer}:day:${day}`;
-    const snapshot = buildLayerSnapshot(layer, day);
-    db.prepare("INSERT OR REPLACE INTO layer_snapshots (layer, day, entity_id, payload) VALUES (?, ?, ?, ?)").run(layer, day, entityId, JSON.stringify(snapshot));
-    const hasChange = db.prepare("SELECT 1 FROM layer_changes WHERE layer = ? AND day = ? LIMIT 1").get(layer, day);
+    const snapshot = await buildLayerSnapshot(layer, day);
+    await dbRun("INSERT OR REPLACE INTO layer_snapshots (layer, day, entity_id, payload) VALUES (?, ?, ?, ?)", layer, day, entityId, JSON.stringify(snapshot));
+    const hasChange = await dbFirst<{ one: number }>("SELECT 1 AS one FROM layer_changes WHERE layer = ? AND day = ? LIMIT 1", layer, day);
     if (!hasChange) {
-      const event = firstEventForLayer(day, layer);
+      const event = await firstEventForLayer(day, layer);
       if (event) {
-        db.prepare(
+        await dbRun(
           `INSERT INTO layer_changes (id, layer, day, entity_table, entity_id, change_type, before_json, after_json, caused_by_event, summary, created_at)
            VALUES (?, ?, ?, ?, ?, 'update', NULL, ?, ?, ?, ?)`,
-        ).run(randomUUID(), layer, day, `${layer}_state`, entityId, JSON.stringify(snapshot), event.id, `${layer} 层 Day ${day} 快照更新`, now);
+          randomUUID(),
+          layer,
+          day,
+          `${layer}_state`,
+          entityId,
+          JSON.stringify(snapshot),
+          event.id,
+          `${layer} 层 Day ${day} 快照更新`,
+          now,
+        );
       }
     }
   }
 }
 
-function firstEventForLayer(day: number, layer: LayerName) {
-  const row = getSimDb().prepare("SELECT * FROM work_events WHERE day = ? AND layer = ? ORDER BY seq ASC LIMIT 1").get(day, layer) as WorkEventRow | undefined;
+async function firstEventForLayer(day: number, layer: LayerName) {
+  const row = await dbFirst<WorkEventRow>("SELECT * FROM work_events WHERE day = ? AND layer = ? ORDER BY seq ASC LIMIT 1", day, layer);
   return row ? mapWorkEvent(row) : null;
 }
 
-function buildLayerSnapshot(layer: LayerName, day: number) {
-  const db = getSimDb();
-  const metrics = getDay(day);
+async function buildLayerSnapshot(layer: LayerName, day: number) {
+  const metrics = await getDay(day);
   if (layer === "mission") {
-    const charter = db.prepare("SELECT * FROM mission_charter LIMIT 1").get();
-    const strategy = db.prepare("SELECT * FROM mission_strategy WHERE status = 'active' ORDER BY effective_from DESC LIMIT 1").get();
-    const okrs = db.prepare("SELECT * FROM mission_okr WHERE status = 'active'").all();
+    const charter = await dbFirst<Record<string, unknown>>("SELECT * FROM mission_charter LIMIT 1");
+    const strategy = await dbFirst<Record<string, unknown>>("SELECT * FROM mission_strategy WHERE status = 'active' ORDER BY effective_from DESC LIMIT 1");
+    const okrs = await dbAll<Record<string, unknown>>("SELECT * FROM mission_okr WHERE status = 'active'");
     return { charter, strategy, okrs, progress: metrics ? { dau: metrics.dau, reputation: metrics.reputation } : null };
   }
   if (layer === "environment") {
-    return { tools: db.prepare("SELECT * FROM tool_registry ORDER BY name").all(), toolCalls: db.prepare("SELECT COUNT(*) AS count FROM work_events WHERE day = ? AND event_type = 'tool_call'").get(day) };
+    return {
+      tools: await dbAll<Record<string, unknown>>("SELECT * FROM tool_registry ORDER BY name"),
+      toolCalls: await dbFirst<{ count: number }>("SELECT COUNT(*) AS count FROM work_events WHERE day = ? AND event_type = 'tool_call'", day),
+    };
   }
   if (layer === "memory") {
-    return { entries: db.prepare("SELECT * FROM memory_entries ORDER BY first_seen_day DESC LIMIT 20").all(), dailySignals: memorySignals(day) };
+    return { entries: await dbAll<Record<string, unknown>>("SELECT * FROM memory_entries ORDER BY first_seen_day DESC LIMIT 20"), dailySignals: await memorySignals(day) };
   }
   if (layer === "structure") {
-    return { employees: db.prepare("SELECT id, display_name, role_template, status, joined_day, agent_handle FROM employees ORDER BY joined_day, id").all(), relations: db.prepare("SELECT * FROM org_relations WHERE effective_from <= ? AND (effective_to IS NULL OR effective_to >= ?)").all(day, day) };
+    return {
+      employees: await dbAll<Record<string, unknown>>("SELECT id, display_name, role_template, status, joined_day, agent_handle FROM employees ORDER BY joined_day, id"),
+      relations: await dbAll<Record<string, unknown>>("SELECT * FROM org_relations WHERE effective_from <= ? AND (effective_to IS NULL OR effective_to >= ?)", day, day),
+    };
   }
   if (layer === "rules") {
-    return { rules: db.prepare("SELECT * FROM rules ORDER BY category, code").all(), executions: db.prepare("SELECT * FROM rule_executions WHERE day = ?").all(day) };
+    return {
+      rules: await dbAll<Record<string, unknown>>("SELECT * FROM rules ORDER BY category, code"),
+      executions: await dbAll<Record<string, unknown>>("SELECT * FROM rule_executions WHERE day = ?", day),
+    };
   }
   if (layer === "resource") {
-    return { metrics, settlement: db.prepare("SELECT * FROM daily_settlement WHERE day = ?").get(day), drivers: db.prepare("SELECT * FROM settlement_drivers WHERE day = ?").all(day) };
+    return {
+      metrics,
+      settlement: await dbFirst<Record<string, unknown>>("SELECT * FROM daily_settlement WHERE day = ?", day),
+      drivers: await dbAll<Record<string, unknown>>("SELECT * FROM settlement_drivers WHERE day = ?", day),
+    };
   }
-  return { signals: db.prepare("SELECT * FROM growth_signals WHERE day = ?").all(day), proposals: db.prepare("SELECT * FROM growth_proposals WHERE day <= ?").all(day), observations: db.prepare("SELECT * FROM growth_observations WHERE day = ?").all(day) };
+  return {
+    signals: await dbAll<Record<string, unknown>>("SELECT * FROM growth_signals WHERE day = ?", day),
+    proposals: await dbAll<Record<string, unknown>>("SELECT * FROM growth_proposals WHERE day <= ?", day),
+    observations: await dbAll<Record<string, unknown>>("SELECT * FROM growth_observations WHERE day = ?", day),
+  };
 }
 
-function memorySignals(day: number) {
-  const articles = listPublishedArticles(day);
+async function memorySignals(day: number) {
+  const articles = await listPublishedArticles(day);
   return {
     articleCount: articles.length,
     averageQuality: articles.length ? Number((articles.reduce((sum, article) => sum + article.qualityScore, 0) / articles.length).toFixed(1)) : 0,
@@ -703,28 +756,32 @@ function memorySignals(day: number) {
   };
 }
 
-export function getWorkEvent(id: string) {
-  const row = getSimDb().prepare("SELECT * FROM work_events WHERE id = ?").get(id) as WorkEventRow | undefined;
+export async function getWorkEvent(id: string) {
+  const row = await dbFirst<WorkEventRow>("SELECT * FROM work_events WHERE id = ?", id);
   return row ? mapWorkEvent(row) : null;
 }
 
-export function listWorkEvents(day: number, layer?: LayerName) {
+export async function listWorkEvents(day: number, layer?: LayerName) {
   const rows = layer
-    ? (getSimDb().prepare("SELECT * FROM work_events WHERE day = ? AND layer = ? ORDER BY seq ASC").all(day, layer) as WorkEventRow[])
-    : (getSimDb().prepare("SELECT * FROM work_events WHERE day = ? ORDER BY seq ASC").all(day) as WorkEventRow[]);
+    ? await dbAll<WorkEventRow>("SELECT * FROM work_events WHERE day = ? AND layer = ? ORDER BY seq ASC", day, layer)
+    : await dbAll<WorkEventRow>("SELECT * FROM work_events WHERE day = ? ORDER BY seq ASC", day);
   return rows.map(mapWorkEvent);
 }
 
-export function getLayerSnapshot(layer: LayerName, day: number) {
-  const rows = getSimDb().prepare("SELECT entity_id, payload FROM layer_snapshots WHERE layer = ? AND day = ? ORDER BY entity_id").all(layer, day) as { entity_id: string; payload: string }[];
+export async function getLayerSnapshot(layer: LayerName, day: number) {
+  const rows = await dbAll<{ entity_id: string; payload: string }>(
+    "SELECT entity_id, payload FROM layer_snapshots WHERE layer = ? AND day = ? ORDER BY entity_id",
+    layer,
+    day,
+  );
   const payload: Record<string, unknown> = {};
   for (const row of rows) payload[row.entity_id] = JSON.parse(row.payload);
   return payload;
 }
 
-export function listLayerChanges(layer: LayerName, day: number) {
-  const rows = getSimDb().prepare("SELECT * FROM layer_changes WHERE layer = ? AND day = ? ORDER BY created_at ASC").all(layer, day) as LayerChangeRow[];
-  return rows.map((row) => ({
+export async function listLayerChanges(layer: LayerName, day: number) {
+  const rows = await dbAll<LayerChangeRow>("SELECT * FROM layer_changes WHERE layer = ? AND day = ? ORDER BY created_at ASC", layer, day);
+  return Promise.all(rows.map(async (row) => ({
     id: row.id,
     layer: row.layer,
     day: row.day,
@@ -734,32 +791,39 @@ export function listLayerChanges(layer: LayerName, day: number) {
     before: safeJson(row.before_json),
     after: safeJson(row.after_json),
     summary: row.summary,
-    causedBy: getWorkEvent(row.caused_by_event),
+    causedBy: await getWorkEvent(row.caused_by_event),
     createdAt: row.created_at,
-  }));
+  })));
 }
 
-export function getLayerDay(layer: LayerName, day: number) {
-  return { layer, day, snapshot: getLayerSnapshot(layer, day), changes: listLayerChanges(layer, day), events: listWorkEvents(day, layer) };
+export async function getLayerDay(layer: LayerName, day: number) {
+  const [snapshot, changes, events] = await Promise.all([
+    getLayerSnapshot(layer, day),
+    listLayerChanges(layer, day),
+    listWorkEvents(day, layer),
+  ]);
+  return { layer, day, snapshot, changes, events };
 }
 
-export function getWorkEventImpact(id: string) {
-  const rows = getSimDb().prepare("SELECT * FROM layer_changes WHERE caused_by_event = ? ORDER BY created_at ASC").all(id) as LayerChangeRow[];
+export async function getWorkEventImpact(id: string) {
+  const rows = await dbAll<LayerChangeRow>("SELECT * FROM layer_changes WHERE caused_by_event = ? ORDER BY created_at ASC", id);
+  const event = await getWorkEvent(id);
+  const layerChanges = await Promise.all(rows.map(async (row) => ({
+    id: row.id,
+    layer: row.layer,
+    day: row.day,
+    entityTable: row.entity_table,
+    entityId: row.entity_id,
+    changeType: row.change_type,
+    before: safeJson(row.before_json),
+    after: safeJson(row.after_json),
+    summary: row.summary,
+    causedBy: await getWorkEvent(row.caused_by_event),
+    createdAt: row.created_at,
+  })));
   return {
-    event: getWorkEvent(id),
-    layerChanges: rows.map((row) => ({
-      id: row.id,
-      layer: row.layer,
-      day: row.day,
-      entityTable: row.entity_table,
-      entityId: row.entity_id,
-      changeType: row.change_type,
-      before: safeJson(row.before_json),
-      after: safeJson(row.after_json),
-      summary: row.summary,
-      causedBy: getWorkEvent(row.caused_by_event),
-      createdAt: row.created_at,
-    })),
+    event,
+    layerChanges,
   };
 }
 

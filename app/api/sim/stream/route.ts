@@ -12,7 +12,7 @@ export async function GET(request: Request) {
   let cleanup: (() => void) | null = null;
 
   const stream = new ReadableStream({
-    start(controller) {
+    async start(controller) {
       cleanup = () => {
         if (closed) return;
         closed = true;
@@ -38,7 +38,7 @@ export async function GET(request: Request) {
 
       request.signal.addEventListener("abort", cleanup);
 
-      const status = simClock.getStatus();
+      const status = await simClock.getStatus();
       safeEnqueue("event: ready\ndata: {}\n\n");
       safeEnqueue(`event: status\ndata: ${JSON.stringify(status)}\n\n`);
       unsubscribe = subscribe((message) => {
@@ -53,7 +53,7 @@ export async function GET(request: Request) {
         safeEnqueue(`event: status\ndata: ${JSON.stringify(message.status)}\n\n`);
       });
       if (status.status === "running") {
-        for (const event of listEvents(status.day)) {
+        for (const event of await listEvents(status.day)) {
           safeEnqueue(`event: event\ndata: ${JSON.stringify(event)}\n\n`);
         }
       }

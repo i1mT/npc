@@ -1,13 +1,10 @@
-import { getSimDb } from "@/db/connection";
+import { dbAll } from "@/db/connection";
 import nameCandidates from "@/mastra/data/employee-name-candidates.json";
 
 const NAMES: string[] = nameCandidates.employeeNameCandidates;
 
-export function pickEmployeeName(): string {
-  const db = getSimDb();
-  const usedRows = db
-    .prepare("SELECT display_name FROM employees")
-    .all() as { display_name: string }[];
+export async function pickEmployeeName(): Promise<string> {
+  const usedRows = await dbAll<{ display_name: string }>("SELECT display_name FROM employees");
   const used = new Set(usedRows.map(r => r.display_name));
   const available = NAMES.filter(n => !used.has(n));
   if (available.length === 0) {

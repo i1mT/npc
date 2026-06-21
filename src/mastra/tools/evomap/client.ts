@@ -1,4 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
+import { getCloudflareContext } from "@opennextjs/cloudflare";
 import {
   clearToken,
   consumePendingState,
@@ -23,6 +24,13 @@ type TokenResponse = {
   livemode?: boolean;
 };
 
+type EvoMapEnv = {
+  EVOMAP_DEVELOPER_CLIENT_ID?: string;
+  EVOMAP_DEVELOPER_CLIENT_SECRET?: string;
+  EVOMAP_DEVELOPER_BASE?: string;
+  EVOMAP_OAUTH_REDIRECT_URI?: string;
+};
+
 export class EvoMapConnectRequiredError extends Error {
   code = "connect_required";
 
@@ -45,7 +53,7 @@ export class EvoMapApiError extends Error {
 }
 
 export async function buildAuthorizeUrl() {
-  const config = getConfig();
+  const config = await getConfig();
   const verifier = randomBytes(32).toString("base64url");
   const challenge = createHash("sha256").update(verifier).digest("base64url");
   const state = createOAuthState();
@@ -66,7 +74,7 @@ export async function exchangeAuthorizationCode(code: string, state: string) {
   if (!verifier) {
     throw new EvoMapApiError(400, "invalid_oauth_state", { error: "invalid_oauth_state" });
   }
-  const config = getConfig();
+  const config = await getConfig();
   const token = await requestToken(new URLSearchParams({
     grant_type: "authorization_code",
     code,
@@ -131,7 +139,8 @@ export async function queryReuse(input: { recipeId?: string; assetId?: string })
 
 async function developerGet(pathAndQuery: string) {
   const token = await getEvoMapAccessToken();
-  const res = await fetch(`${getConfig().base}${pathAndQuery}`, {
+  const config = await getConfig();
+  const res = await fetch(`${config.base}${pathAndQuery}`, {
     headers: { Authorization: `Bearer ${token}`, Accept: "application/json" },
     signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
   });
@@ -145,7 +154,7 @@ async function developerGet(pathAndQuery: string) {
 }
 
 async function refreshAccessToken(refreshToken: string) {
-  const config = getConfig();
+  const config = await getConfig();
   return requestToken(new URLSearchParams({
     grant_type: "refresh_token",
     refresh_token: refreshToken,
@@ -155,7 +164,8 @@ async function refreshAccessToken(refreshToken: string) {
 }
 
 async function requestToken(body: URLSearchParams) {
-  const res = await fetch(`${getConfig().base}/oauth/token`, {
+  const config = await getConfig();
+  const res = await fetch(`${config.base}/oauth/token`, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" },
     body,
@@ -191,16 +201,26 @@ function toTokenRecord(token: TokenResponse, previous?: EvoMapTokenRecord): EvoM
   };
 }
 
-function getConfig() {
-  const clientId = process.env.EVOMAP_DEVELOPER_CLIENT_ID;
-  const clientSecret = process.env.EVOMAP_DEVELOPER_CLIENT_SECRET;
+async function getConfig() {
+  const env = await getRuntimeEnv();
+  const clientId = env.EVOMAP_DEVELOPER_CLIENT_ID ?? process.env.EVOMAP_DEVELOPER_CLIENT_ID;
+  const clientSecret = env.EVOMAP_DEVELOPER_CLIENT_SECRET ?? process.env.EVOMAP_DEVELOPER_CLIENT_SECRET;
   if (!clientId || !clientSecret) {
     throw new EvoMapConnectRequiredError("EvoMap Developer OAuth client is not configured.");
   }
   return {
     clientId,
     clientSecret,
-    base: process.env.EVOMAP_DEVELOPER_BASE ?? DEFAULT_BASE,
-    redirectUri: process.env.EVOMAP_OAUTH_REDIRECT_URI ?? "http://localhost:3000/api/evomap/oauth/callback",
+    base: env.EVOMAP_DEVELOPER_BASE ?? process.env.EVOMAP_DEVELOPER_BASE ?? DEFAULT_BASE,
+    redirectUri: env.EVOMAP_OAUTH_REDIRECT_URI ?? process.env.EVOMAP_OAUTH_REDIRECT_URI ?? "http://localhost:3000/api/evomap/oauth/callback",
   };
+}
+
+async function getRuntimeEnv(): Promise<EvoMapEnv> {
+  try {
+    const { env } = await getCloudflareContext({ async: true });
+    return env as EvoMapEnv;
+  } catch {
+    return {};
+  }
 }

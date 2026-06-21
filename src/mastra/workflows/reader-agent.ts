@@ -117,7 +117,7 @@ async function reviewOneArticle(
       });
 
       // Persist to DB and emit as stored event
-      logEvent({
+      await logEvent({
         day: article.day,
         agentId: READER_AGENT_ID,
         agentName: READER_AGENT_NAME,
@@ -153,11 +153,11 @@ export async function runReaderAgent(
   day: number,
   runtime: CollaborationRuntime,
 ): Promise<{ avgOverall: number; reviewCount: number }> {
-  const articles = listPublishedArticles(day);
+  const articles = await listPublishedArticles(day);
   if (articles.length === 0) return { avgOverall: 0, reviewCount: 0 };
 
   // Announce start
-  logEvent({
+  await logEvent({
     day,
     agentId: READER_AGENT_ID,
     agentName: READER_AGENT_NAME,
@@ -174,7 +174,7 @@ export async function runReaderAgent(
     const score = results[j];
     const article = articles[j];
     if (!score || !article) continue;
-    insertReview({
+    await insertReview({
       articleId: article.id,
       day,
       scoreInfo: score.info_density,
@@ -188,11 +188,11 @@ export async function runReaderAgent(
     reviewed++;
   }
 
-  const { avgOverall } = avgReviewScoresByDay(day);
+  const { avgOverall } = await avgReviewScoresByDay(day);
 
   if (reviewed > 0) {
     const summaryContent = `完成 ${reviewed} 篇文章评读，整体满意度均值 ${avgOverall.toFixed(1)}/10`;
-    logEvent({
+    await logEvent({
       day,
       agentId: READER_AGENT_ID,
       agentName: READER_AGENT_NAME,
@@ -200,7 +200,7 @@ export async function runReaderAgent(
       content: summaryContent,
       metadata: { source: "reader-agent", reviewCount: reviewed, avgOverall, threadId: runtime.threadId },
     });
-    addLayerEvent({
+    await addLayerEvent({
       day,
       actorId: READER_AGENT_ID,
       actorName: READER_AGENT_NAME,

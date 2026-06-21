@@ -1,32 +1,29 @@
-import { LibSQLStore, LibSQLVector } from "@mastra/libsql";
+import { D1Store } from "@mastra/cloudflare-d1";
 import { Memory } from "@mastra/memory";
-import { getEvomapEmbeddingModel } from "@/mastra/runtime/evomap-model";
+import { getDb } from "@/db/connection";
 
-const memoryDbUrl = process.env.NPC_MEMORY_DB_URL ?? "file:./memory.db";
-const embeddingModel = process.env.NPC_EMBEDDING_MODEL;
+let cachedStorage: D1Store | null = null;
+let cachedMemory: Memory | null = null;
 
-export const mastraStorage = new LibSQLStore({
-  id: "npc-agent-memory",
-  url: memoryDbUrl,
-});
+export async function getMastraStorage() {
+  if (!cachedStorage) {
+    cachedStorage = new D1Store({
+      id: "npc-agent-memory",
+      binding: await getDb(),
+    });
+  }
+  return cachedStorage;
+}
 
-export const agentMemory = new Memory({
-  storage: mastraStorage,
-  ...(embeddingModel ? {
-    vector: new LibSQLVector({
-      id: "npc-agent-memory-vector",
-      url: memoryDbUrl,
-    }),
-    embedder: getEvomapEmbeddingModel(embeddingModel),
-  } : {}),
-  options: {
-    lastMessages: 20,
-    semanticRecall: embeddingModel ? {
-      topK: 5,
-      messageRange: {
-        before: 2,
-        after: 2,
+export async function getAgentMemory() {
+  if (!cachedMemory) {
+    cachedMemory = new Memory({
+      storage: await getMastraStorage(),
+      options: {
+        lastMessages: 20,
+        semanticRecall: false,
       },
-    } : false,
-  },
-});
+    });
+  }
+  return cachedMemory;
+}

@@ -6,8 +6,8 @@ export const dynamic = "force-dynamic";
 
 export async function POST() {
   try {
-    resetSimDb();
-    setStatus("idle");
+    await resetSimDb();
+    await setStatus("idle");
     return NextResponse.json({ ok: true });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

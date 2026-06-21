@@ -1,5 +1,5 @@
 import { listDays } from "@/db/sim";
-import { getSimDb } from "@/db/connection";
+import { dbAll, dbFirst } from "@/db/connection";
 import { notFound } from "next/navigation";
 import { dayToShortDate } from "@/lib/dates";
 import { SUBSCRIPTION_DAILY_PRICE, subscriptionRevenue } from "@/simulation/formulas";
@@ -55,34 +55,33 @@ type DayFinance = {
 
 // ─── Data loader ─────────────────────────────────────────────────────────────
 
-function getDayFinance(day: number): DayFinance | null {
-  const db = getSimDb();
-
-  const dayRow = db
-    .prepare(
-      `SELECT d.day, d.capital, d.reputation, d.dau, d.subscribers,
-              d.ad_revenue, d.llm_cost, d.labor_cost,
-              COUNT(pa.id) AS article_count
-       FROM sim_days d
-       LEFT JOIN published_articles pa ON pa.day = d.day
-       WHERE d.day = ?
-       GROUP BY d.day`,
-    )
-    .get(day) as {
+async function getDayFinance(day: number): Promise<DayFinance | null> {
+  const dayRow = await dbFirst<{
     day: number; capital: number; reputation: number; dau: number;
     subscribers: number; ad_revenue: number; llm_cost: number;
     labor_cost: number; article_count: number;
-  } | undefined;
+  }>(
+    `SELECT d.day, d.capital, d.reputation, d.dau, d.subscribers,
+            d.ad_revenue, d.llm_cost, d.labor_cost,
+            COUNT(pa.id) AS article_count
+     FROM sim_days d
+     LEFT JOIN published_articles pa ON pa.day = d.day
+     WHERE d.day = ?
+     GROUP BY d.day`,
+    day,
+  );
 
   if (!dayRow) return null;
 
-  const prevRow = db
-    .prepare("SELECT capital, reputation, dau, subscribers FROM sim_days WHERE day = ?")
-    .get(day - 1) as { capital: number; reputation: number; dau: number; subscribers: number } | undefined;
+  const prevRow = await dbFirst<{ capital: number; reputation: number; dau: number; subscribers: number }>(
+    "SELECT capital, reputation, dau, subscribers FROM sim_days WHERE day = ?",
+    day - 1,
+  );
 
-  const settlementRow = db
-    .prepare("SELECT revenue_breakdown, cost_breakdown FROM daily_settlement WHERE day = ?")
-    .get(day) as { revenue_breakdown: string; cost_breakdown: string } | undefined;
+  const settlementRow = await dbFirst<{ revenue_breakdown: string; cost_breakdown: string }>(
+    "SELECT revenue_breakdown, cost_breakdown FROM daily_settlement WHERE day = ?",
+    day,
+  );
 
   const revBD = settlementRow
     ? (JSON.parse(settlementRow.revenue_breakdown) as { ad: number; contract_ad?: number; organic_ad?: number; subscription: number; sponsorship: number; gross: number })
@@ -91,13 +90,12 @@ function getDayFinance(day: number): DayFinance | null {
     ? (JSON.parse(settlementRow.cost_breakdown) as { llm: number; fixed: number; newsletter: number; labor: number; net: number })
     : null;
 
-  const agentTokenRows = db
-    .prepare(
-      `SELECT actor_id, actor_name, SUM(cost_token) AS total_tokens, SUM(cost_yuan) AS cost_yuan
-       FROM work_events WHERE day = ? AND cost_token > 0
-       GROUP BY actor_id, actor_name ORDER BY total_tokens DESC`,
-    )
-    .all(day) as { actor_id: string; actor_name: string; total_tokens: number; cost_yuan: number }[];
+  const agentTokenRows = await dbAll<{ actor_id: string; actor_name: string; total_tokens: number; cost_yuan: number }>(
+    `SELECT actor_id, actor_name, SUM(cost_token) AS total_tokens, SUM(cost_yuan) AS cost_yuan
+     FROM work_events WHERE day = ? AND cost_token > 0
+     GROUP BY actor_id, actor_name ORDER BY total_tokens DESC`,
+    day,
+  );
 
   const TOKEN_PRICE = 0.000002;
   const agentTokens: AgentToken[] = agentTokenRows.map(r => ({
@@ -108,15 +106,14 @@ function getDayFinance(day: number): DayFinance | null {
   }));
   const totalTokens = agentTokens.reduce((s, r) => s + r.totalTokens, 0);
 
-  const empRows = db
-    .prepare(
-      `SELECT id, display_name, role_template, agent_handle, daily_salary, joined_day
-       FROM employees WHERE joined_day <= ? AND status = 'active' ORDER BY joined_day`,
-    )
-    .all(day) as {
+  const empRows = await dbAll<{
     id: string; display_name: string; role_template: string;
     agent_handle: string; daily_salary: number; joined_day: number;
-  }[];
+  }>(
+    `SELECT id, display_name, role_template, agent_handle, daily_salary, joined_day
+     FROM employees WHERE joined_day <= ? AND status = 'active' ORDER BY joined_day`,
+    day,
+  );
 
   const employees: Employee[] = empRows.map(e => ({
     id: e.id,
@@ -127,9 +124,10 @@ function getDayFinance(day: number): DayFinance | null {
     joinedDay: e.joined_day,
   }));
 
-  const qualityDriver = db
-    .prepare("SELECT delta FROM settlement_drivers WHERE day = ? AND metric = 'dau' AND factor = 'quality_score'")
-    .get(day) as { delta: number } | undefined;
+  const qualityDriver = await dbFirst<{ delta: number }>(
+    "SELECT delta FROM settlement_drivers WHERE day = ? AND metric = 'dau' AND factor = 'quality_score'",
+    day,
+  );
 
   const contractAdRev   = revBD?.contract_ad  ?? 0;
   const organicAdRev    = revBD?.organic_ad   ?? (revBD?.ad ?? dayRow.ad_revenue);
@@ -217,10 +215,10 @@ function LineRow({ label, value, sub, bold, color, indent }: {
 export default async function SettlementPage({ params }: { params: Promise<{ day: string }> }) {
   const { day: rawDay } = await params;
   const day = Number(rawDay);
-  const f = getDayFinance(day);
+  const f = await getDayFinance(day);
   if (!f) notFound();
 
-  const allDays = listDays();
+  const allDays = await listDays();
   const isProfitable = f.netRevenue >= 0;
 
   return (

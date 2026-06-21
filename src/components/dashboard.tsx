@@ -772,7 +772,10 @@ function ArticlesTab({ dayNum }: { dayNum: number }) {
     setLoading(true);
     fetch(`/api/days/${dayNum}/articles`)
       .then(r => r.json())
-      .then((data: { articles: Article[] }) => { setArticles(data.articles ?? []); setLoading(false); });
+      .then((data) => {
+        setArticles(((data as { articles: Article[] }).articles) ?? []);
+        setLoading(false);
+      });
   }, [dayNum]);
 
   if (loading) return <div className="p-8 text-center text-sm text-ink/40">加载中…</div>;
@@ -1110,12 +1113,12 @@ export function Dashboard({ initialDays, initialSelectedDay, onNewDay }: {
         // New board meeting — fetch it
         void fetch("/api/sim/board-meeting", { cache: "no-store" })
           .then(r => r.json())
-          .then((d: { meeting: BoardMeetingInfo | null }) => setBoardMeeting(d.meeting));
+          .then((d) => setBoardMeeting((d as { meeting: BoardMeetingInfo | null }).meeting));
       } else if (evType === "org_change") {
         // Refresh days summary to reflect headcount changes
         void fetch("/api/days", { cache: "no-store" })
           .then(r => r.json())
-          .then((d: { days: DaySummary[] }) => setDays(d.days));
+          .then((d) => setDays((d as { days: DaySummary[] }).days));
       }
     },
     onAgentStream: (update) => {

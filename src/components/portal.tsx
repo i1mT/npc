@@ -30,7 +30,7 @@ export function Portal({ initialDays }: { initialDays: DaySummary[] }) {
     if (!selectedDay) return;
     fetch(`/api/days/${selectedDay}/articles`, { cache: "no-store" })
       .then((response) => response.json())
-      .then((json: { articles: PublishedArticle[] }) => setArticles(json.articles));
+      .then((json) => setArticles((json as { articles: PublishedArticle[] }).articles));
   }, [selectedDay]);
 
   if (!days.length) {

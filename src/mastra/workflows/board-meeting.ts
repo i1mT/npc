@@ -1,13 +1,14 @@
 import { Agent } from "@mastra/core/agent";
 import { setBoardAutoDirective } from "@/db/board";
-import { getSimDb } from "@/db/connection";
+import { dbAll, dbFirst } from "@/db/connection";
 import { addBoardDirective, getBoardMeeting, getDay, resumeBoardMeeting } from "@/db/sim";
 import type { CollaborationRuntime } from "@/mastra/collaboration";
 import { runStructuredStep } from "@/mastra/collaboration";
 import type { WorkflowDefinition } from "@/lib/types";
 import { boardDirectiveSchema, weeklyReportSchema, type BoardDirectiveOutput, type WeeklyReportOutput } from "@/mastra/runtime/schemas";
 import { getEvomapModel } from "@/mastra/runtime/evomap-model";
-import { agentMemory } from "@/mastra/runtime/memory";
+import { getAgentMemory } from "@/mastra/runtime/memory";
+import { evomapExperienceInstruction } from "@/mastra/role-templates";
 import { agentMeta, logEvent } from "@/simulation/mock-apis";
 
 export class BoardDecisionError extends Error {
@@ -29,17 +30,25 @@ export const boardWorkflow: WorkflowDefinition = {
   ],
 };
 
-const boardAgent = new Agent({
-  id: "board",
-  name: "董事会",
-  instructions: [
-    "你是 AGI Daily 的董事会。你的职责是审阅 CEO 周报并给出战略指令。",
-    "宪法层：用户信任 > 短期收入；内容质量 > 发布速度；长期 Reputation > 单次广告收益。",
-    "你只能从以下指令中选择一个：ADJUST_OKR / STRATEGIC_PIVOT / INJECT_CAPITAL / RESTRUCTURE / AMEND_CONSTITUTION / MAINTAIN。",
-  ].join("\n"),
-  model: getEvomapModel(),
-  memory: agentMemory,
-});
+let boardAgent: Agent | null = null;
+
+async function getBoardAgent() {
+  if (!boardAgent) {
+    boardAgent = new Agent({
+      id: "board",
+      name: "董事会",
+      instructions: [
+        "你是 AGI Daily 的董事会。你的职责是审阅 CEO 周报并给出战略指令。",
+        "宪法层：用户信任 > 短期收入；内容质量 > 发布速度；长期 Reputation > 单次广告收益。",
+        "你只能从以下指令中选择一个：ADJUST_OKR / STRATEGIC_PIVOT / INJECT_CAPITAL / RESTRUCTURE / AMEND_CONSTITUTION / MAINTAIN。",
+        evomapExperienceInstruction,
+      ].join("\n"),
+      model: getEvomapModel(),
+      memory: await getAgentMemory(),
+    });
+  }
+  return boardAgent;
+}
 
 export async function generateWeeklyReportForBoard(day: number, runtime: CollaborationRuntime) {
   const reportStep = await runStructuredStep<WeeklyReportOutput>({
@@ -49,9 +58,9 @@ export async function generateWeeklyReportForBoard(day: number, runtime: Collabo
     schema: weeklyReportSchema,
     eventType: "board",
     stepKind: "weekly-report",
-    prompt: weeklyReportPrompt(day),
+    prompt: await weeklyReportPrompt(day),
   });
-  const weeklyReport = { day, ...weeklyMetrics(day), ...reportStep.data };
+  const weeklyReport = { day, ...await weeklyMetrics(day), ...reportStep.data };
   const directive = await generateBoardDirective(day, runtime.threadId, weeklyReport);
   return {
     ...weeklyReport,
@@ -61,8 +70,8 @@ export async function generateWeeklyReportForBoard(day: number, runtime: Collabo
   };
 }
 
-export function weeklyReportForBoard(day: number) {
-  const metrics = getDay(day);
+export async function weeklyReportForBoard(day: number) {
+  const metrics = await getDay(day);
   if (!metrics) throw new BoardDecisionError(`Day ${day} does not exist.`, 404, "day_not_found");
   return {
     day,
@@ -76,18 +85,18 @@ export function weeklyReportForBoard(day: number) {
   };
 }
 
-export function applyBoardDirective(day: number, directive: string) {
+export async function applyBoardDirective(day: number, directive: string) {
   const clean = directive.trim();
   if (!clean) throw new Error("Board directive cannot be empty.");
-  const dayState = getDay(day);
+  const dayState = await getDay(day);
   if (!dayState) throw new BoardDecisionError(`Day ${day} does not exist.`, 404, "day_not_found");
   if (!dayState.isBoardDay) throw new BoardDecisionError(`Day ${day} is not a board day.`, 409, "not_board_day");
-  const meeting = getBoardMeeting(day);
+  const meeting = await getBoardMeeting(day);
   if (!meeting) throw new BoardDecisionError(`Day ${day} has no suspended board workflow.`, 409, "board_workflow_not_suspended");
   if (meeting.status !== "pending") throw new BoardDecisionError(`Day ${day} board workflow has already resumed.`, 409, "board_workflow_already_resumed");
-  addBoardDirective(day, clean);
-  resumeBoardMeeting(day, clean);
-  logEvent({
+  await addBoardDirective(day, clean);
+  await resumeBoardMeeting(day, clean);
+  await logEvent({
     day,
     ...agentMeta("董事会"),
     eventType: "board",
@@ -97,7 +106,7 @@ export function applyBoardDirective(day: number, directive: string) {
 }
 
 async function generateBoardDirective(day: number, threadId: string, weeklyReport: Record<string, unknown>): Promise<BoardDirectiveOutput> {
-  const output = await boardAgent.generate(jsonOnlyBoardPrompt(weeklyReport), {
+  const output = await (await getBoardAgent()).generate(jsonOnlyBoardPrompt(weeklyReport), {
     memory: { thread: `${threadId}-board`, resource: "npc-board" },
     maxOutputTokens: 65536,
     abortSignal: AbortSignal.timeout(30000),
@@ -108,8 +117,8 @@ async function generateBoardDirective(day: number, threadId: string, weeklyRepor
     reason: `自动指令因存在潜在违宪表述被降级。周报显示 ${String(weeklyReport.summary).slice(0, 80)}`,
     detail: "维持现有策略，要求下周继续以内容质量和用户信任为先。",
   } : directive;
-  setBoardAutoDirective(day, safeDirective.directive, safeDirective.reason);
-  logEvent({
+  await setBoardAutoDirective(day, safeDirective.directive, safeDirective.reason);
+  await logEvent({
     day,
     ...agentMeta("董事会"),
     eventType: "board",
@@ -120,8 +129,8 @@ async function generateBoardDirective(day: number, threadId: string, weeklyRepor
   return safeDirective;
 }
 
-function weeklyReportPrompt(day: number) {
-  const metrics = weeklyMetrics(day);
+async function weeklyReportPrompt(day: number) {
+  const metrics = await weeklyMetrics(day);
   return [
     `请生成本周（Day ${metrics.startDay}-${day}）经营周报，用于董事会审阅。`,
     "本周数据：",
@@ -166,13 +175,13 @@ function parseJsonText(text: string) {
   return JSON.parse(candidate.slice(start, end + 1));
 }
 
-function weeklyMetrics(day: number) {
+async function weeklyMetrics(day: number) {
   const startDay = Math.max(1, day - 6);
-  const days = getSimDb().prepare("SELECT day, dau, reputation, capital, ad_revenue FROM sim_days WHERE day BETWEEN ? AND ? ORDER BY day").all(startDay, day) as {
+  const days = await dbAll<{
     day: number; dau: number; reputation: number; capital: number; ad_revenue: number;
-  }[];
-  const articleCount = (getSimDb().prepare("SELECT COUNT(*) AS count FROM published_articles WHERE day BETWEEN ? AND ?").get(startDay, day) as { count: number }).count;
-  const majorDecisions = getSimDb().prepare("SELECT content FROM work_events WHERE day BETWEEN ? AND ? AND event_type = 'decision' ORDER BY day, seq LIMIT 12").all(startDay, day) as { content: string }[];
+  }>("SELECT day, dau, reputation, capital, ad_revenue FROM sim_days WHERE day BETWEEN ? AND ? ORDER BY day", startDay, day);
+  const articleCount = (await dbFirst<{ count: number }>("SELECT COUNT(*) AS count FROM published_articles WHERE day BETWEEN ? AND ?", startDay, day))?.count ?? 0;
+  const majorDecisions = await dbAll<{ content: string }>("SELECT content FROM work_events WHERE day BETWEEN ? AND ? AND event_type = 'decision' ORDER BY day, seq LIMIT 12", startDay, day);
   const first = days[0];
   const last = days[days.length - 1];
   if (!first || !last) throw new BoardDecisionError(`Day ${day} does not exist.`, 404, "day_not_found");

@@ -1,11 +1,11 @@
 import { Agent } from "@mastra/core/agent";
 import { Mastra } from "@mastra/core";
-import { createHash } from "node:crypto";
-import { getSimDb } from "@/db/connection";
+import { createHash, randomUUID } from "node:crypto";
+import { dbAll } from "@/db/connection";
 import { getEvomapModel } from "@/mastra/runtime/evomap-model";
 import { getLLMConfig } from "@/mastra/runtime/llm-config";
-import { agentMemory, mastraStorage } from "@/mastra/runtime/memory";
-import { roleTemplates, type RoleTemplateName } from "@/mastra/role-templates";
+import { getAgentMemory, getMastraStorage } from "@/mastra/runtime/memory";
+import { evomapExperienceInstruction, roleTemplates, type RoleTemplateName } from "@/mastra/role-templates";
 import { TOOL_GRANTS_BY_ROLE, type ToolName } from "@/mastra/tools/npc-tools";
 
 export type RuntimeAgentDef = {
@@ -24,20 +24,21 @@ export type RuntimeAgentDef = {
 class AgentFactory {
   private agents = new Map<string, RuntimeAgentDef>();
   private mastraAgents = new Map<string, Agent>();
-  private runtimeId = `mastra-runtime-${process.pid}`;
+  private runtimeId = `mastra-runtime-${randomUUID().slice(0, 8)}`;
   private mastra: Mastra | null = null;
 
-  register(handle: string, def: Omit<RuntimeAgentDef, "handle">) {
+  async register(handle: string, def: Omit<RuntimeAgentDef, "handle">) {
     const agent = { handle, ...def };
+    const memory = await getAgentMemory();
     this.agents.set(handle, agent);
     this.mastraAgents.set(handle, new Agent({
       id: handle,
       name: def.displayName,
       instructions: def.instructions,
       model: getEvomapModel(),
-      memory: agentMemory,
+      memory,
     }));
-    this.rebuildMastra();
+    await this.rebuildMastra();
     return agent;
   }
 
@@ -47,15 +48,13 @@ class AgentFactory {
     return agent;
   }
 
-  loadActiveEmployees() {
-    const rows = getSimDb()
-      .prepare("SELECT id, display_name, role_template, system_prompt, soul, tools_granted, memory, agent_handle FROM employees WHERE status = 'active' ORDER BY joined_day, id")
-      .all() as {
+  async loadActiveEmployees() {
+    const rows = await dbAll<{
         id: string; display_name: string; role_template: RoleTemplateName;
         system_prompt: string | null; soul: string | null;
         tools_granted: string | null; memory: string | null;
         agent_handle: string;
-      }[];
+      }>("SELECT id, display_name, role_template, system_prompt, soul, tools_granted, memory, agent_handle FROM employees WHERE status = 'active' ORDER BY joined_day, id");
     for (const row of rows) {
       const template = roleTemplates[row.role_template] ?? roleTemplates.editor;
       const soul = row.soul ?? "";
@@ -67,8 +66,9 @@ class AgentFactory {
       } catch {
         grantedToolNames = TOOL_GRANTS_BY_ROLE[row.role_template] ?? [];
       }
+      grantedToolNames = mergeToolGrants(grantedToolNames, TOOL_GRANTS_BY_ROLE[row.role_template] ?? []);
       const instructions = buildInstructions(row.display_name, template.prompt, row.system_prompt, soul, memory, grantedToolNames);
-      this.register(row.agent_handle, {
+      await this.register(row.agent_handle, {
         displayName:       row.display_name,
         roleTemplate:      row.role_template,
         instructions,
@@ -83,8 +83,8 @@ class AgentFactory {
     return this.list();
   }
 
-  getMastraInstance() {
-    if (!this.mastra) this.rebuildMastra();
+  async getMastraInstance() {
+    if (!this.mastra) await this.rebuildMastra();
     return this.mastra;
   }
 
@@ -104,10 +104,10 @@ class AgentFactory {
     }));
   }
 
-  private rebuildMastra() {
+  private async rebuildMastra() {
     this.mastra = new Mastra({
       agents: Object.fromEntries(this.mastraAgents.entries()),
-      storage: mastraStorage,
+      storage: await getMastraStorage(),
     });
   }
 }
@@ -138,6 +138,7 @@ function buildInstructions(
   if (memory) {
     parts.push("## 工作记忆（最近积累的洞察）", memory, "");
   }
+  parts.push(evomapExperienceInstruction, "");
   parts.push(
     "## 可用工具",
     grantedTools.map(t => `- ${t}()`).join("\n"),
@@ -153,4 +154,8 @@ function buildInstructions(
 
 function hashInstructions(instructions: string) {
   return createHash("sha256").update(instructions).digest("hex").slice(0, 12);
+}
+
+function mergeToolGrants(current: ToolName[], roleDefaults: ToolName[]) {
+  return [...new Set([...current, ...roleDefaults])];
 }

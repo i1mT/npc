@@ -10,7 +10,7 @@ import { randomUUID } from "node:crypto";
 import { ensureBaselineData, getLatestDay, projectDay, recordDailySettlement, upsertDay, addLayerEvent } from "@/db/sim";
 import { getTopicPerformanceLast7Days } from "@/db/memory-queries";
 import { employeeExistsByRole, listActiveEmployeeLabels, spawnActiveEmployee } from "@/db/employees";
-import { getSimDb, upsertSoulSnapshot } from "@/db/connection";
+import { dbAll, dbFirst, upsertSoulSnapshot } from "@/db/connection";
 import { updateDayEditorNote } from "@/db/day-notes";
 import type { DayState } from "@/lib/types";
 
@@ -27,6 +27,7 @@ export class SimFatalError extends Error {
 import { agentFactory } from "@/mastra/agent-factory";
 import { startDailyCollaboration, say, type CollaborationRuntime } from "@/mastra/collaboration";
 import { createToolsForTurn, type AgentToolCtx } from "@/mastra/tools/npc-tools";
+import { getTavilyToolsets } from "@/mastra/tools/tavily-mcp";
 import { agentMeta, logEvent } from "@/simulation/mock-apis";
 import { emitAgentStream } from "@/simulation/event-bus";
 import { adRevenue, nextCapital, nextDAU, nextReputation, nextSubscribers, socialReach, laborCost, subscriptionRevenue } from "@/simulation/formulas";
@@ -34,7 +35,7 @@ import { runReaderAgent } from "@/mastra/workflows/reader-agent";
 import { getYesterdayFeedbackContext } from "@/db/feedback";
 import { boardWorkflow, generateWeeklyReportForBoard } from "@/mastra/workflows/board-meeting";
 import { suspendBoardWorkflowTool } from "@/mastra/tools/sim-tools";
-import type { RoleTemplateName } from "@/mastra/role-templates";
+import { evomapExperienceInstruction, type RoleTemplateName } from "@/mastra/role-templates";
 
 // ─── @mention routing ─────────────────────────────────────────────────────────
 
@@ -262,7 +263,7 @@ function buildSystemPrompt(
   state: DayState,
   topicHistory: string,
   teamLabels: string,
-  feedbackCtx?: ReturnType<typeof getYesterdayFeedbackContext>,
+  feedbackCtx?: Awaited<ReturnType<typeof getYesterdayFeedbackContext>>,
 ): string {
   const date = new Date(Date.UTC(2026, 5, day)); // Day 1 = 2026-06-01
   const dateStr = date.toISOString().slice(0, 10);
@@ -274,6 +275,8 @@ function buildSystemPrompt(
     "【工作模式】",
     "这是 AGI Daily 编辑部的内部群聊。每个 Agent 基于当前信息自主决策，调用自己的工具，通过 @提及 协作。",
     "没有固定流程——你们自己判断今天要做什么、怎么做。",
+    "",
+    evomapExperienceInstruction,
     "",
     "【@提及规则】",
     "- 用 @总编 提及总编，@编辑 提及编辑，@增长 提及增长 Agent，@商业 提及商业 Agent，@专栏 提及专栏 Agent",
@@ -303,11 +306,13 @@ function buildSystemPrompt(
 const ROLE_PROMPTS: Record<string, string> = {
   "editor-in-chief": [
     "你是总编 Agent，负责今日工作的统筹协调。",
+    "你必须以公司的七层约束做决策：使命层、能力层、记忆层、组织层、规则层、资源层、生长协议层。",
+    "规则层硬约束：每日 AGI Daily 必须恰好发布 10 篇文章，不多不少；少于 10 篇时不能批准发布，必须要求 @编辑 继续补齐。",
     "**今日开场任务**：",
     "  - 简短问候团队，说明今日重点方向",
     "  - 调用 get_metrics 或 fetch_articles 了解现状",
     "  - 明确 @编辑 去选稿，@增长 分析增长机会，@商业 汇报广告情况，@专栏 给出栏目建议（只@你们团队中实际存在的人）",
-    "  - 根据大家汇报的情况，审核编辑选稿并决定是否发布",
+    "  - 根据大家汇报的情况，审核编辑选稿并决定是否发布；只有恰好 10 篇且符合规则层约束时才批准",
     "⚠️ 批准发布后 @编辑 让他发布，不要自己调用 publish_articles。",
   ].join("\n"),
 
@@ -315,9 +320,10 @@ const ROLE_PROMPTS: Record<string, string> = {
     "你是编辑 Agent，负责内容选稿和发布。",
     "你的工作流：",
     "  1. 调用 fetch_articles 获取今日候选文章（id 是十六进制字符串）",
-    "  2. 筛选 8-10 篇，在群聊中告知总编选了哪些，为每篇写中文标题和摘要",
-    "  3. 等总编审核批准后，调用 publish_articles 发布",
-    "  4. 发布后调用 write_memory 记录今日选题方向",
+    "  2. 筛选恰好 10 篇，在群聊中告知总编选了哪些，为每篇写中文标题和摘要",
+    "  3. 文章封面可以调用 Tavily MCP 的 tavily_search 寻找合适的封面，参数建议 include_images=true、include_image_descriptions=true、max_results=5、search_depth=basic",
+    "  4. 等总编审核批准后，调用 publish_articles 发布；可在单篇文章里提交 imageUrl，原文已有封面图时系统会优先使用原文图",
+    "  5. 发布后调用 write_memory 记录今日选题方向",
     "⚠️ publish_articles 的 sourceId 必须是 fetch_articles 返回的 id 字段（十六进制）。绝对不能用 URL 或标题。",
   ].join("\n"),
 
@@ -393,16 +399,16 @@ type AgentTurnResult = {
 };
 
 export async function runAgenticDay(day: number): Promise<DayState> {
-  ensureBaselineData();
-  const runtime = startDailyCollaboration(day);
-  const previous = getLatestDay();
+  await ensureBaselineData();
+  const runtime = await startDailyCollaboration(day);
+  const previous = await getLatestDay();
   const base: DayState = previous
     ? { day, capital: previous.capital, reputation: previous.reputation, dau: previous.dau, subscribers: previous.subscribers, adRevenue: previous.adRevenue, llmCost: previous.llmCost, isBoardDay: day % 7 === 0 }
     : { day, capital: 10000, reputation: 62, dau: 1200, subscribers: 260, adRevenue: 0, llmCost: 0, isBoardDay: day % 7 === 0 };
 
-  const topicHistory = formatTopicHistory(getTopicPerformanceLast7Days(day));
-  const teamLabels   = listActiveEmployeeLabels().map(e => `${e.display_name}(${e.role_template})`).join("、");
-  const feedbackCtx  = day > 1 ? getYesterdayFeedbackContext(day - 1) : null;
+  const topicHistory = formatTopicHistory(await getTopicPerformanceLast7Days(day));
+  const teamLabels   = (await listActiveEmployeeLabels()).map(e => `${e.display_name}(${e.role_template})`).join("、");
+  const feedbackCtx  = day > 1 ? await getYesterdayFeedbackContext(day - 1) : null;
   const systemPrompt = buildSystemPrompt(day, base, topicHistory, teamLabels, feedbackCtx ?? undefined);
 
   // Chat history accumulated as plain text lines (easier to pass to LLM)
@@ -444,7 +450,9 @@ export async function runAgenticDay(day: number): Promise<DayState> {
       runtime,
       published: publishCtx,
     };
-    const toolsets = createToolsForTurn(toolContext, agentDef2.grantedToolNames);
+    const localToolsets = createToolsForTurn(toolContext, agentDef2.grantedToolNames);
+    const tavilyToolsets = roleTemplate === "editor" ? await getTavilyToolsets() : {};
+    const toolsets = { ...localToolsets, ...tavilyToolsets };
 
     let response: unknown;
     let text = "";
@@ -512,7 +520,7 @@ export async function runAgenticDay(day: number): Promise<DayState> {
         });
         const errMsg = err instanceof Error ? err.message : String(err);
         console.error(`[agentic-day] agent ${activeHandle} turn ${turnNumber} error:`, errMsg);
-        logEvent({
+        await logEvent({
           day,
           agentId: activeHandle,
           agentName,
@@ -574,7 +582,7 @@ export async function runAgenticDay(day: number): Promise<DayState> {
         if (!nextMentionSources.has(handle)) nextMentionSources.set(handle, result.agentName);
       }
 
-      say({
+      await say({
         day,
         runtime,
         agentHandle: result.handle,
@@ -593,7 +601,7 @@ export async function runAgenticDay(day: number): Promise<DayState> {
     // Sync agents hired during this turn batch into the queue
     {
       const knownHandles = new Set(agentQueue);
-      const freshAgents = agentFactory.loadActiveEmployees();
+      const freshAgents = await agentFactory.loadActiveEmployees();
       for (const emp of freshAgents) {
         if (!knownHandles.has(emp.handle)) {
           agentQueue.push(emp.handle);
@@ -637,8 +645,7 @@ export async function runAgenticDay(day: number): Promise<DayState> {
   const averageQuality = publishCtx.count > 0 ? publishCtx.totalQuality / publishCtx.count : 6.5;
 
   // Quality momentum: weight current quality with past 3 days (涟漪效应)
-  const db = getSimDb();
-  const pastDays = db.prepare("SELECT avg_quality FROM sim_days WHERE day < ? AND avg_quality > 0 ORDER BY day DESC LIMIT 3").all(day) as { avg_quality: number }[];
+  const pastDays = await dbAll<{ avg_quality: number }>("SELECT avg_quality FROM sim_days WHERE day < ? AND avg_quality > 0 ORDER BY day DESC LIMIT 3", day);
   const qualityMomentum = pastDays.length > 0
     ? pastDays.reduce((s, r) => s + r.avg_quality, 0) / pastDays.length
     : averageQuality;
@@ -658,8 +665,8 @@ export async function runAgenticDay(day: number): Promise<DayState> {
   const reputation  = nextReputation(base.reputation, averageQuality, publishCtx.count >= 8);
 
   // Advertising revenue: organic (CPM-tiered) + contract (Agent-negotiated placements)
-  const placementRow = db.prepare("SELECT COALESCE(SUM(revenue), 0) AS total FROM ad_placements WHERE day = ?").get(day) as { total: number };
-  const contractAdRevenue = Number(placementRow.total.toFixed(2));
+  const placementRow = await dbFirst<{ total: number }>("SELECT COALESCE(SUM(revenue), 0) AS total FROM ad_placements WHERE day = ?", day);
+  const contractAdRevenue = Number((placementRow?.total ?? 0).toFixed(2));
   const organicAdRevenue  = adRevenue(dau, reputation);
   const totalAdRevenue    = Number((contractAdRevenue + organicAdRevenue).toFixed(2));
 
@@ -667,20 +674,20 @@ export async function runAgenticDay(day: number): Promise<DayState> {
   const subscribers = nextSubscribers(base.subscribers, dau, averageQuality);
 
   // Calculate labor cost from active employees
-  const activeEmps = db.prepare("SELECT daily_salary FROM employees WHERE status = 'active'").all() as { daily_salary: number }[];
+  const activeEmps = await dbAll<{ daily_salary: number }>("SELECT daily_salary FROM employees WHERE status = 'active'");
   const laborCostAmount = laborCost(activeEmps);
 
   const capital = nextCapital(base.capital, totalAdRevenue + subscriptionRevenue(subscribers), cost + laborCostAmount, publishCtx.count);
 
   const nextState: DayState = { day, capital, reputation, dau, subscribers, adRevenue: totalAdRevenue, llmCost: cost, isBoardDay: day % 7 === 0 };
-  upsertDay({ ...nextState, laborCost: laborCostAmount, avgQuality: averageQuality });
+  await upsertDay({ ...nextState, laborCost: laborCostAmount, avgQuality: averageQuality });
 
   // Settlement event
   const chiefName = runtime.agents.find(a => a.handle === "editor-in-chief")?.displayName ?? "总编 Agent";
   const adSummary = contractAdRevenue > 0
     ? `有机广告 ¥${organicAdRevenue.toFixed(2)} + 合同广告 ¥${contractAdRevenue.toFixed(2)}`
     : `有机广告 ¥${organicAdRevenue.toFixed(2)}`;
-  const settlementEvent = addLayerEvent({
+  const settlementEvent = await addLayerEvent({
     day,
     actorId: "editor-in-chief",
     actorName: chiefName,
@@ -690,7 +697,7 @@ export async function runAgenticDay(day: number): Promise<DayState> {
     content: `资源织网结算：发布 ${publishCtx.count} 篇，DAU ${dau}，声誉 ${reputation.toFixed(1)}，广告收入 ¥${totalAdRevenue.toFixed(2)}（${adSummary}）。`,
     payload: { averageQuality, qualityMomentum, socialReach: reach, capital, subscribers, tokenTotal, contractAdRevenue, organicAdRevenue },
   });
-  logEvent({
+  await logEvent({
     day,
     agentId: "editor-in-chief",
     agentName: chiefName,
@@ -699,7 +706,7 @@ export async function runAgenticDay(day: number): Promise<DayState> {
     metadata: { source: "agentic-day", toolSummary: { tool: "dailySettlement", input: `质量 ${averageQuality.toFixed(1)} 动量 ${qualityMomentum.toFixed(1)} 触达 ${reach}`, result: `DAU ${dau} 声誉 ${reputation.toFixed(1)}` } },
   });
 
-  recordDailySettlement(
+  await recordDailySettlement(
     { ...nextState, laborCost: laborCostAmount, contractAdRevenue, organicAdRevenue },
     previous,
     settlementEvent.id,
@@ -707,21 +714,21 @@ export async function runAgenticDay(day: number): Promise<DayState> {
   );
   await writeEditorNote(day, runtime, publishCtx.titles, averageQuality, dau, reputation);
   await runGrowthProtocol(day, runtime, { dau, reputation, capital, monthlyRevenue: totalAdRevenue });
-  writeDailyLayerEvents(day, runtime, publishCtx.count, settlementEvent.id);
-  projectDay(day);
+  await writeDailyLayerEvents(day, runtime, publishCtx.count, settlementEvent.id);
+  await projectDay(day);
 
   // Board meeting on day % 7
   if (nextState.isBoardDay) {
     const weeklyReport = await generateWeeklyReportForBoard(day, runtime);
     await suspendBoardWorkflowTool.execute({ day, weeklyReport });
-    logEvent({
+    await logEvent({
       day,
       ...agentMeta("总编"),
       eventType: "board",
       content: `生成董事会周报：${weeklyReport.summary}`,
       metadata: { workflow: boardWorkflow.name, step: "weekly-report", weeklyReport },
     });
-    logEvent({
+    await logEvent({
       day,
       ...agentMeta("董事会"),
       eventType: "board",
@@ -756,7 +763,7 @@ async function writeEditorNote(
       abortSignal: AbortSignal.timeout(30_000),
     } as never);
     const note = extractText(output);
-    if (note) updateDayEditorNote(day, note);
+    if (note) await updateDayEditorNote(day, note);
   } catch { /* non-critical */ }
 }
 
@@ -765,12 +772,12 @@ async function runGrowthProtocol(
   runtime: CollaborationRuntime,
   metrics: { dau: number; reputation: number; capital: number; monthlyRevenue: number },
 ) {
-  const fallbackRole = growthRoleFromThreshold(metrics);
+  const fallbackRole = await growthRoleFromThreshold(metrics);
   const agent = agentFactory.getMastraAgent("editor-in-chief");
   const prompt = [
     `请判断今日增长协议（Day ${day}）：`,
     `DAU=${metrics.dau} 声誉=${metrics.reputation.toFixed(1)} 资金=¥${Math.round(metrics.capital)} 月收入=¥${metrics.monthlyRevenue.toFixed(2)}`,
-    `当前团队：${listActiveEmployeeLabels().map(e => `${e.display_name}(${e.role_template})`).join("、")}`,
+    `当前团队：${(await listActiveEmployeeLabels()).map(e => `${e.display_name}(${e.role_template})`).join("、")}`,
     "输出 JSON：{\"status\":\"expand\"|\"maintain\"|\"contract\",\"reason\":\"...\",\"newAgentRole\":\"growth\"|\"business\"|\"column\"|null,\"newAgentName\":\"...\"}",
   ].join("\n");
 
@@ -790,7 +797,7 @@ async function runGrowthProtocol(
     decision = { status: "expand", reason: `硬阈值触发 ${fallbackRole} 孵化`, newAgentRole: fallbackRole, newAgentName: defaultAgentName(fallbackRole) };
   }
 
-  addLayerEvent({
+  await addLayerEvent({
     day,
     actorId: "editor-in-chief",
     actorName: "总编 Agent",
@@ -801,7 +808,7 @@ async function runGrowthProtocol(
     payload: decision,
     refs: { target_table: "growth_signals" },
   });
-  logEvent({
+  await logEvent({
     day,
     agentId: "editor-in-chief",
     agentName: "总编 Agent",
@@ -812,7 +819,7 @@ async function runGrowthProtocol(
 
   if (decision.status === "expand" && decision.newAgentRole) {
     const roleTemplate = decision.newAgentRole as Extract<RoleTemplateName, "growth" | "business" | "column">;
-    spawnActiveEmployee({
+    await spawnActiveEmployee({
       day,
       displayName: decision.newAgentName ?? defaultAgentName(roleTemplate),
       roleTemplate,
@@ -823,8 +830,8 @@ async function runGrowthProtocol(
   }
 }
 
-function writeDailyLayerEvents(day: number, runtime: CollaborationRuntime, articleCount: number, settlementEventId: string) {
-  addLayerEvent({
+async function writeDailyLayerEvents(day: number, runtime: CollaborationRuntime, articleCount: number, settlementEventId: string) {
+  await addLayerEvent({
     day,
     actorId: "editor-in-chief",
     actorName: "总编 Agent",
@@ -835,7 +842,7 @@ function writeDailyLayerEvents(day: number, runtime: CollaborationRuntime, artic
     payload: { articleCount, rules: ["HARD_SOURCE_URL_REQUIRED", "SOFT_DAILY_10_ARTICLES"] },
     refs: { target_table: "published_articles" },
   });
-  addLayerEvent({
+  await addLayerEvent({
     day,
     actorId: "editor-in-chief",
     actorName: "总编 Agent",
@@ -856,14 +863,14 @@ async function runMemoryReflection(
   chatSummary: string,
   publishCtx: { count: number; titles: string[]; totalQuality: number },
 ) {
-  const db = getSimDb();
   const articlesPublished = publishCtx.count;
   const avgQuality = publishCtx.count > 0 ? publishCtx.totalQuality / publishCtx.count : 0;
 
   // Get today's events summary for context
-  const todayEvents = db.prepare(
-    "SELECT event_type, substr(content,1,120) as content FROM work_events WHERE day=? ORDER BY seq LIMIT 30"
-  ).all(day) as { event_type: string; content: string }[];
+  const todayEvents = await dbAll<{ event_type: string; content: string }>(
+    "SELECT event_type, substr(content,1,120) as content FROM work_events WHERE day=? ORDER BY seq LIMIT 30",
+    day,
+  );
   const eventSummary = todayEvents
     .filter(e => e.event_type === "message" || e.event_type === "decision")
     .map(e => `- ${e.content}`)
@@ -914,7 +921,7 @@ async function runMemoryReflection(
 
       const text = extractText(output);
       if (text) {
-        logEvent({
+        await logEvent({
           day, agentId: agent.handle, agentName: agent.displayName,
           eventType: "thinking",
           content: text,
@@ -924,20 +931,21 @@ async function runMemoryReflection(
     } catch (err) {
       console.error(`[memory-reflection] ${agent.handle} failed:`, err instanceof Error ? err.message : err);
     } finally {
-      snapshotAgentSoulMemory(agent.handle, day);
+      await snapshotAgentSoulMemory(agent.handle, day);
     }
   }));
 }
 
-function snapshotAgentSoulMemory(agentHandle: string, day: number) {
-  const row = getSimDb()
-    .prepare("SELECT id, soul, memory FROM employees WHERE agent_handle = ?")
-    .get(agentHandle) as { id: string; soul: string | null; memory: string | null } | undefined;
+async function snapshotAgentSoulMemory(agentHandle: string, day: number) {
+  const row = await dbFirst<{ id: string; soul: string | null; memory: string | null }>(
+    "SELECT id, soul, memory FROM employees WHERE agent_handle = ?",
+    agentHandle,
+  );
   if (!row) return;
-  upsertSoulSnapshot(row.id, day, row.soul ?? "", row.memory ?? "");
+  await upsertSoulSnapshot(row.id, day, row.soul ?? "", row.memory ?? "");
 }
 
-function formatTopicHistory(topics: ReturnType<typeof getTopicPerformanceLast7Days>) {
+function formatTopicHistory(topics: Awaited<ReturnType<typeof getTopicPerformanceLast7Days>>) {
   if (!topics.length) return "";
   return topics
     .slice(0, 8)
@@ -945,10 +953,10 @@ function formatTopicHistory(topics: ReturnType<typeof getTopicPerformanceLast7Da
     .join("\n");
 }
 
-function growthRoleFromThreshold(metrics: { dau: number; monthlyRevenue: number }): GrowthRole | null {
-  if (metrics.dau > 100000 && !employeeExistsByRole("column"))   return "column";
-  if (metrics.monthlyRevenue > 30000 && !employeeExistsByRole("business")) return "business";
-  if (metrics.dau > 10000  && !employeeExistsByRole("growth"))   return "growth";
+async function growthRoleFromThreshold(metrics: { dau: number; monthlyRevenue: number }): Promise<GrowthRole | null> {
+  if (metrics.dau > 100000 && !(await employeeExistsByRole("column")))   return "column";
+  if (metrics.monthlyRevenue > 30000 && !(await employeeExistsByRole("business"))) return "business";
+  if (metrics.dau > 10000  && !(await employeeExistsByRole("growth")))   return "growth";
   return null;
 }
 

@@ -6,11 +6,11 @@ export const dynamic = "force-dynamic";
 
 export async function GET(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const article = getArticle(id);
+  const article = await getArticle(id);
   if (!article) return NextResponse.json({ error: "not found" }, { status: 404 });
 
-  const humanComments = listHumanCommentsByArticle(id);
-  const agentReviews = listReviewsByArticle(id);
+  const humanComments = await listHumanCommentsByArticle(id);
+  const agentReviews = await listReviewsByArticle(id);
 
   const avgScores = agentReviews.length > 0
     ? {
@@ -28,7 +28,7 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
 
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const article = getArticle(id);
+  const article = await getArticle(id);
   if (!article) return NextResponse.json({ error: "not found" }, { status: 404 });
 
   let body: { authorName?: string; content?: string };
@@ -42,6 +42,6 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   const content = (body.content ?? "").trim().slice(0, 500);
   if (!authorName || !content) return NextResponse.json({ error: "authorName and content are required" }, { status: 400 });
 
-  const commentId = insertHumanComment({ articleId: id, day: article.day, authorName, content });
+  const commentId = await insertHumanComment({ articleId: id, day: article.day, authorName, content });
   return NextResponse.json({ ok: true, id: commentId });
 }
