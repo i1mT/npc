@@ -121,12 +121,14 @@ export function WorkEventCard({ event, showImpact = true }: { event: WorkEvent; 
   const mentions = (meta.mentions ?? []) as { agentName?: string; agentId?: string }[];
   const replyTo = meta.replyTo ?? refs.reply_to;
   const isTool = event.eventType === "tool_call" || event.eventType === "tool_result" || Boolean(toolSummary);
+  const isEvoMap = isEvoMapTool(toolSummary?.tool ?? event.action);
   return (
-    <article className="border-l-4 border-ink bg-white p-3 shadow-sm">
+    <article className={`border-l-4 bg-white p-3 shadow-sm ${isEvoMap ? "border-[#0891b2] ring-1 ring-[#67e8f9]" : "border-ink"}`}>
       <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-ink/55">
         <span className="font-bold text-ink">{event.actorName}</span>
         <span>#{event.seq} · {event.eventType} · {labelize(event.layer)}</span>
       </div>
+      {isEvoMap ? <p className="mt-2 inline-flex rounded bg-[#ecfeff] px-2 py-0.5 text-[10px] font-black uppercase tracking-wide text-[#155e75]">EvoMap 进化能力</p> : null}
       {mentions.length ? <p className="mt-2 text-xs font-bold text-cobalt">提到：{mentions.map((item) => item.agentName ?? item.agentId).join("、")}</p> : null}
       {replyTo ? <p className="mt-1 text-xs text-ink/55">回复链：回复事件 {String(replyTo).slice(0, 8)}</p> : null}
       <p className="mt-2 whitespace-pre-wrap text-sm leading-6">{event.content}</p>
@@ -144,9 +146,12 @@ export function WorkEventCard({ event, showImpact = true }: { event: WorkEvent; 
 }
 
 function ToolSummary({ summary, fallback }: { summary: { tool?: string; input?: string; result?: string } | null; fallback: WorkEvent }) {
+  const isEvoMap = isEvoMapTool(summary?.tool ?? fallback.action);
   return (
-    <details className="mt-3 border border-rule bg-[#f7f7f2] p-3" open={false}>
-      <summary className="cursor-pointer text-sm font-bold">工具调用摘要：{summary?.tool ?? fallback.action}</summary>
+    <details className={`mt-3 border p-3 ${isEvoMap ? "border-[#67e8f9] bg-[#ecfeff]" : "border-rule bg-[#f7f7f2]"}`} open={false}>
+      <summary className="cursor-pointer text-sm font-bold">
+        {isEvoMap ? "EvoMap 调用摘要：" : "工具调用摘要："}{summary?.tool ?? fallback.action}
+      </summary>
       <div className="mt-2 grid gap-2 text-sm md:grid-cols-2">
         <div>
           <p className="text-xs font-bold text-ink/45">用了什么工具</p>
@@ -171,4 +176,8 @@ function labelize(key: string) {
 
 function isPlainObject(value: unknown) {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function isEvoMapTool(tool?: string | null) {
+  return Boolean(tool?.startsWith("evomap_"));
 }

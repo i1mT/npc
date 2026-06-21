@@ -1,10 +1,11 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+@import "react-day-picker/style.css";
 
 :root {
-  --font-sans: Arial, Helvetica, sans-serif;
-  --font-serif: Georgia, "Times New Roman", serif;
+  --font-sans: "Source Sans 3", "Inter", Arial, sans-serif;
+  --font-serif: "Playfair Display", Georgia, "Times New Roman", serif;
 }
 
 * {
@@ -13,8 +14,9 @@
 
 body {
   margin: 0;
-  background: #f7f3ea;
+  background: #f5f3ee;
   color: #161616;
+  font-family: var(--font-sans);
 }
 
 button, input, textarea, select {
@@ -29,6 +31,31 @@ button, input, textarea, select {
 .animate-event-in {
   opacity: 0;
   animation: event-in 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+/* ── Running time indicator ─────────────────────────────────── */
+@keyframes time-sweep {
+  from { transform: translateX(-120%); }
+  to   { transform: translateX(260%);  }
+}
+.animate-time-sweep {
+  animation: time-sweep 1.2s cubic-bezier(0.45, 0, 0.2, 1) infinite;
+}
+
+@keyframes time-glow {
+  0%, 100% { box-shadow: 0 0 0 rgba(46, 158, 107, 0); }
+  50%      { box-shadow: 0 0 18px rgba(46, 158, 107, 0.35); }
+}
+.animate-time-glow {
+  animation: time-glow 1.8s ease-in-out infinite;
+}
+
+@keyframes generating-card {
+  0%, 100% { box-shadow: 0 0 0 1px rgba(37,78,219,.08), 0 12px 28px rgba(37,78,219,.06); }
+  50%      { box-shadow: 0 0 0 1px rgba(37,78,219,.34), 0 16px 34px rgba(37,78,219,.14); }
+}
+.animate-generating-card {
+  animation: generating-card 1.5s ease-in-out infinite;
 }
 
 /* ── Typing indicator dots ──────────────────────────────────── */
@@ -57,4 +84,144 @@ button, input, textarea, select {
     linear-gradient(to right, rgba(22, 22, 22, 0.08) 1px, transparent 1px),
     linear-gradient(to bottom, rgba(22, 22, 22, 0.06) 1px, transparent 1px);
   background-size: 28px 28px;
+}
+
+/* ── Journal typography ─────────────────────────────────────── */
+.journal-masthead {
+  font-family: var(--font-serif);
+  letter-spacing: -0.02em;
+  font-weight: 900;
+}
+
+.section-label {
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: 0.25em;
+  text-transform: uppercase;
+  color: #c8102e;
+  border-top: 2px solid #c8102e;
+  padding-top: 6px;
+  display: block;
+  margin-bottom: 12px;
+}
+
+.section-label-dark {
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: 0.25em;
+  text-transform: uppercase;
+  color: rgba(245,243,238,0.4);
+  border-top: 1px solid rgba(245,243,238,0.15);
+  padding-top: 6px;
+  display: block;
+  margin-bottom: 12px;
+}
+
+.article-body p:first-of-type::first-letter {
+  font-family: var(--font-serif);
+  font-size: 3.6em;
+  font-weight: 900;
+  float: left;
+  line-height: 0.78;
+  margin-right: 6px;
+  margin-top: 6px;
+  color: #161616;
+}
+
+.pull-quote {
+  border-left: 3px solid #c8102e;
+  padding-left: 1.25rem;
+  margin: 1.5rem 0;
+  font-family: var(--font-serif);
+  font-size: 1.05rem;
+  font-style: italic;
+  color: rgba(22,22,22,0.75);
+  line-height: 1.7;
+}
+
+.journal-divider {
+  border: none;
+  border-top: 1px solid #d8d0c2;
+  margin: 0;
+}
+
+.journal-divider-thick {
+  border: none;
+  border-top: 2px solid #161616;
+  margin: 0;
+}
+
+/* Quality dot indicator */
+.quality-dot::before {
+  content: "";
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  margin-right: 4px;
+  vertical-align: middle;
+}
+.quality-dot-high::before  { background: #4fbf87; }
+.quality-dot-mid::before   { background: #d97706; }
+.quality-dot-low::before   { background: #9ca3af; }
+
+/* ── react-day-picker dark theme for dashboard header ── */
+.rdp-dark .rdp-root {
+  --rdp-accent-color: #f5d131;
+  --rdp-accent-background-color: rgba(245, 209, 49, 0.18);
+  --rdp-today-color: #f5d131;
+  --rdp-day-height: 36px;
+  --rdp-day-width: 36px;
+  --rdp-day_button-height: 34px;
+  --rdp-day_button-width: 34px;
+  --rdp-outside-opacity: 0.12;
+  --rdp-disabled-opacity: 0.18;
+  --rdp-nav_button-height: 28px;
+  --rdp-nav_button-width: 28px;
+  color: rgba(245, 243, 238, 0.75);
+  font-size: 12px;
+}
+.rdp-dark .rdp-day_button {
+  color: rgba(245, 243, 238, 0.65);
+  font-size: 12px;
+  transition: background-color 0.1s, color 0.1s;
+}
+.rdp-dark .rdp-day_button:hover:not(:disabled) {
+  background-color: rgba(245, 243, 238, 0.1);
+  color: rgba(245, 243, 238, 1);
+}
+.rdp-dark .rdp-selected .rdp-day_button {
+  background-color: #f5d131 !important;
+  color: #0d1117 !important;
+  font-weight: 700;
+  border-color: transparent !important;
+}
+.rdp-dark .rdp-today:not(.rdp-selected) .rdp-day_button {
+  border-color: rgba(245, 243, 238, 0.3) !important;
+  color: rgba(245, 243, 238, 1);
+}
+.rdp-dark .rdp-weekday {
+  color: rgba(245, 243, 238, 0.3);
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+.rdp-dark .rdp-caption_label {
+  color: rgba(245, 243, 238, 0.9);
+  font-weight: 700;
+  font-size: 13px;
+}
+.rdp-dark .rdp-button_previous,
+.rdp-dark .rdp-button_next {
+  color: rgba(245, 243, 238, 0.45) !important;
+  border-radius: 6px;
+  transition: background-color 0.1s, color 0.1s;
+}
+.rdp-dark .rdp-button_previous:hover,
+.rdp-dark .rdp-button_next:hover {
+  background-color: rgba(245, 243, 238, 0.1) !important;
+  color: rgba(245, 243, 238, 0.9) !important;
+}
+.rdp-dark .rdp-chevron {
+  fill: currentColor;
 }

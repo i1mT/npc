@@ -1,4 +1,4 @@
-export type SimStatus = "idle" | "running" | "paused";
+export type SimStatus = "idle" | "running" | "paused" | "error";
 
 export type EventType =
   | "thinking"

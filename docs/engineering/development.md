@@ -49,6 +49,17 @@ NPC_LLM_MODEL=claude-sonnet-4-6
 NPC_EMBEDDING_MODEL=text-embedding-3-small
 ```
 
+- 黑客松 EvoMap 进化能力接入使用 Developer OAuth2 + PKCE，`.env.local` 需要额外配置：
+
+```bash
+EVOMAP_DEVELOPER_CLIENT_ID=...
+EVOMAP_DEVELOPER_CLIENT_SECRET=...
+EVOMAP_DEVELOPER_BASE=https://evomap.ai
+EVOMAP_OAUTH_REDIRECT_URI=http://localhost:3000/api/evomap/oauth/callback
+```
+
+- 本地 OAuth token 保存于 `.evomap/oauth-token.json`，该目录已加入 `.gitignore`，不得提交。
+- 工具页 `/dashboard/tools` 提供 EvoMap Connect / Disconnect；Agent 工具只使用 `recipe:read gene:read reuse:query` 只读 scope。
 - `src/mastra/runtime/evomap-model.ts` 使用 Chat Completions；如果外部网关不支持 Responses API，不要改回默认 `createOpenAI()(model)`。
 - `src/mastra/runtime/memory.ts` 默认使用 `memory.db` 保存 Mastra Memory 和向量索引，可通过 `NPC_MEMORY_DB_URL` 切换。
 - 无效 LLM token 应让流程失败并记录 `error` 事件，不能回退到本地模板或伪造内容。

@@ -9,13 +9,15 @@ const config: Config = {
         serif: ["var(--font-serif)", "Georgia", "serif"],
       },
       colors: {
-        ink: "#161616",
-        paper: "#f7f3ea",
-        rule: "#d8d0c2",
-        cobalt: "#254edb",
-        signal: "#f6c445",
-        mint: "#4fbf87",
-        coral: "#e45c3a"
+        ink:      "#161616",
+        paper:    "#f5f3ee",
+        rule:     "#d8d0c2",
+        cobalt:   "#1a3a7a",
+        signal:   "#f6c445",
+        mint:     "#4fbf87",
+        coral:    "#e45c3a",
+        midnight: "#0d1117",
+        accent:   "#c8102e",
       }
     },
   },

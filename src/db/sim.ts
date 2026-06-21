@@ -2,6 +2,23 @@ import { randomUUID } from "node:crypto";
 import { getSimDb } from "@/db/connection";
 import { articleCoverUrl } from "@/lib/cover";
 import type { BoardMeeting, BoardMeetingStatus, DayState, DaySummary, EventType, LayerName, PublishedArticle, RuleDefinition, SimEvent, SimStatus, WorkEvent } from "@/lib/types";
+import nameCandidates from "@/mastra/data/employee-name-candidates.json";
+import { AD_CPM_BY_REPUTATION, SUBSCRIPTION_DAILY_PRICE, subscriptionRevenue } from "@/simulation/formulas";
+
+const BOOTSTRAP_NAMES: Record<string, string> = {};
+const ALL_NAMES: string[] = nameCandidates.employeeNameCandidates;
+
+function pickBootstrapName(handle: string): string {
+  const db = getSimDb();
+  const existing = db.prepare("SELECT display_name FROM employees WHERE agent_handle = ?").get(handle) as { display_name: string } | undefined;
+  if (existing) return existing.display_name; // preserve name if already set
+  if (BOOTSTRAP_NAMES[handle]) return BOOTSTRAP_NAMES[handle]!;
+  const usedNames = new Set(Object.values(BOOTSTRAP_NAMES));
+  const available = ALL_NAMES.filter(n => !usedNames.has(n));
+  const name = available[Math.floor(Math.random() * available.length)] ?? `员工${handle}`;
+  BOOTSTRAP_NAMES[handle] = name;
+  return name;
+}
 
 type DayRow = {
   day: number;
@@ -11,6 +28,7 @@ type DayRow = {
   subscribers: number;
   ad_revenue: number;
   llm_cost: number;
+  labor_cost: number;
   is_board_day: number;
   editor_note: string | null;
   completed_at: string | null;
@@ -271,11 +289,11 @@ export function getDay(day: number) {
   return row ? mapDay(row) : null;
 }
 
-export function upsertDay(state: DayState) {
+export function upsertDay(state: DayState & { laborCost?: number; avgQuality?: number }) {
   getSimDb()
     .prepare(
-      `INSERT INTO sim_days (day, capital, reputation, dau, subscribers, ad_revenue, llm_cost, is_board_day, completed_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `INSERT INTO sim_days (day, capital, reputation, dau, subscribers, ad_revenue, llm_cost, labor_cost, avg_quality, is_board_day, completed_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(day) DO UPDATE SET
        capital = excluded.capital,
        reputation = excluded.reputation,
@@ -283,16 +301,29 @@ export function upsertDay(state: DayState) {
        subscribers = excluded.subscribers,
        ad_revenue = excluded.ad_revenue,
        llm_cost = excluded.llm_cost,
+       labor_cost = excluded.labor_cost,
+       avg_quality = excluded.avg_quality,
        is_board_day = excluded.is_board_day,
        completed_at = excluded.completed_at`,
     )
-    .run(state.day, state.capital, state.reputation, state.dau, state.subscribers, state.adRevenue, state.llmCost, state.isBoardDay ? 1 : 0, new Date().toISOString());
+    .run(state.day, state.capital, state.reputation, state.dau, state.subscribers, state.adRevenue, state.llmCost, state.laborCost ?? 0, state.avgQuality ?? 0, state.isBoardDay ? 1 : 0, new Date().toISOString());
 }
 
-export function recordDailySettlement(state: DayState, previous: DayState | null, causedByEvent: string, factors: { averageQuality: number; socialReach: number }) {
+export function recordDailySettlement(
+  state: DayState & { laborCost?: number; contractAdRevenue?: number; organicAdRevenue?: number },
+  previous: DayState | null,
+  causedByEvent: string,
+  factors: { averageQuality: number; socialReach: number; readerScore?: number },
+) {
   const db = getSimDb();
-  const revenue = { ad: state.adRevenue, subscription: Number((state.subscribers * 0.03).toFixed(2)), sponsorship: 0 };
-  const cost = { llm: state.llmCost, fixed: 18, newsletter: 12, promotion: 0 };
+  const contractAd   = Number((state.contractAdRevenue ?? 0).toFixed(2));
+  const organicAd    = Number((state.organicAdRevenue ?? state.adRevenue).toFixed(2));
+  const subscriptionRev = subscriptionRevenue(state.subscribers);
+  const grossRev = Number((contractAd + organicAd + subscriptionRev).toFixed(2));
+  const revenue  = { contract_ad: contractAd, organic_ad: organicAd, ad: state.adRevenue, subscription: subscriptionRev, sponsorship: 0, gross: grossRev };
+  const labor  = state.laborCost ?? 0;
+  const netRev = Number((grossRev - state.llmCost - labor - 18 - 12).toFixed(2));
+  const cost   = { llm: state.llmCost, fixed: 18, newsletter: 12, labor, promotion: 0, net: netRev };
   db.prepare(
     `INSERT OR REPLACE INTO daily_settlement (day, revenue_breakdown, cost_breakdown, capital_delta, reputation_delta, dau_delta, subscribers_delta, settled_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -525,9 +556,9 @@ export function ensureBaselineData() {
   ] as const) {
     db.prepare("INSERT OR IGNORE INTO rules (id, code, category, text, threshold_json, effective_from, status) VALUES (?, ?, ?, ?, '{}', 1, 'active')").run(...rule);
   }
-  bootstrapEmployee("editor-in-chief", "总编 Agent", "editor_in_chief", "editor-in-chief",
+  bootstrapEmployee("editor-in-chief", pickBootstrapName("editor-in-chief"), "editor_in_chief", "editor-in-chief",
     INITIAL_SYSTEM_PROMPTS.editor_in_chief, INITIAL_SOULS.editor_in_chief, INITIAL_TOOLS.editor_in_chief, 1, "bootstrap");
-  bootstrapEmployee("editor", "编辑 Agent", "editor", "editor",
+  bootstrapEmployee("editor", pickBootstrapName("editor"), "editor", "editor",
     INITIAL_SYSTEM_PROMPTS.editor, INITIAL_SOULS.editor, INITIAL_TOOLS.editor, 1, "bootstrap");
   db.prepare("INSERT OR IGNORE INTO org_relations (id, superior_id, subordinate_id, effective_from) VALUES (?, ?, ?, 1)").run("org-editor-chief-editor", "editor-in-chief", "editor");
 }
@@ -582,10 +613,16 @@ const INITIAL_TOOLS: Record<string, string> = {
   editor: JSON.stringify(["fetch_articles", "publish_articles", "read_memory", "write_memory", "update_my_soul"]),
 };
 
+const BOOTSTRAP_DAILY_SALARY: Record<string, number> = {
+  "editor-in-chief": 500,
+  "editor": 300,
+};
+
 function bootstrapEmployee(id: string, name: string, role: string, handle: string, systemPrompt: string, soul: string, toolsGranted: string, day: number, eventId: string) {
+  const salary = BOOTSTRAP_DAILY_SALARY[handle] ?? 300;
   getSimDb()
-    .prepare("INSERT OR IGNORE INTO employees (id, display_name, role_template, status, joined_day, system_prompt, soul, tools_granted, agent_handle, caused_by_event) VALUES (?, ?, ?, 'active', ?, ?, ?, ?, ?, ?)")
-    .run(id, name, role, day, systemPrompt, soul, toolsGranted, handle, eventId);
+    .prepare("INSERT OR IGNORE INTO employees (id, display_name, role_template, status, joined_day, system_prompt, soul, tools_granted, agent_handle, caused_by_event, daily_salary) VALUES (?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?)")
+    .run(id, name, role, day, systemPrompt, soul, toolsGranted, handle, eventId, salary);
 }
 
 function projectWorkEvent(eventId: string) {
@@ -760,8 +797,8 @@ export function listRules(): RuleDefinition[] {
       id: "revenue-formula",
       group: "因果公式",
       title: "广告收入",
-      description: "广告收入 = DAU × CPM / 1000 × Reputation / 50。",
-      parameters: { base_cpm_yuan: 5, reputation_baseline: 50 },
+      description: "广告收入 = DAU × 声誉分档 CPM / 1000。声誉越高，广告主出价越高。",
+      parameters: AD_CPM_BY_REPUTATION,
     },
     {
       id: "board-cadence",
@@ -776,6 +813,20 @@ export function listRules(): RuleDefinition[] {
       title: "董事会指令校验",
       description: "只接受已存在且标记为董事会日、状态为 pending 的 day；非董事会日、不存在 day、重复提交都会被拒绝。",
       parameters: { require_existing_day: true, require_board_day: true, require_pending_meeting: true },
+    },
+    {
+      id: "cost-structure",
+      group: "因果公式",
+      title: "成本构成",
+      description: "每日总成本 = LLM Token成本 + 固定运营(¥18) + 简报发送(¥12) + 全体员工日薪。人力成本占大头，总编可通过 adjust_salary 工具调节。",
+      parameters: { fixed: 18, newsletter: 12, labor: "按角色日薪汇总" },
+    },
+    {
+      id: "revenue-net",
+      group: "因果公式",
+      title: "毛收入与纯收入",
+      description: `毛收入 = 广告收入 + 订阅收入(订阅数×¥${SUBSCRIPTION_DAILY_PRICE}) + 赞助。纯收入 = 毛收入 - 所有成本（含人力）。纯收入为负意味着公司亏损。`,
+      parameters: { subscription_daily_price: SUBSCRIPTION_DAILY_PRICE, sponsorship: "由 record_ad_sale 扩展" },
     },
   ];
 }

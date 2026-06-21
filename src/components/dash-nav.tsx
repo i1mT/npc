@@ -1,17 +1,20 @@
 "use client";
 
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   BarChart2, Bot, BookOpen, Home, LayoutGrid, Layers,
-  Play, Shield, Square, Users, Zap, ChevronRight, Wrench,
+  CalendarDays, Play, Shield, Users, Zap, ChevronRight, Wrench, Settings, Receipt,
 } from "lucide-react";
+import { DayPicker } from "react-day-picker";
+import { zhCN } from "react-day-picker/locale";
 import { cn } from "@/lib/utils";
 import { dayToShortDate } from "@/lib/dates";
+import { useSimStream, type SimStatusSnapshot } from "@/components/live-sim";
 
-// ─── Sim control bar (polls /api/sim/status) ────────────────────────────────
+// ─── Sim control bar ─────────────────────────────────────────────────────────
 
-type SimStatus = { day: number; status: "idle" | "running" | "paused" };
+type SimStatus = SimStatusSnapshot;
 
 export function SimControlBar() {
   const [sim, setSim]                 = useState<SimStatus | null>(null);
@@ -19,7 +22,7 @@ export function SimControlBar() {
   const router = useRouter();
 
   useEffect(() => {
-    const poll = async () => {
+    const loadInitialState = async () => {
       const [sr, br] = await Promise.all([
         fetch("/api/sim/status",       { cache: "no-store" }),
         fetch("/api/sim/board-meeting", { cache: "no-store" }),
@@ -30,10 +33,20 @@ export function SimControlBar() {
         setBoardPending(meeting !== null);
       }
     };
-    void poll();
-    const t = setInterval(poll, 3000);
-    return () => clearInterval(t);
+    void loadInitialState();
   }, []);
+
+  useSimStream({
+    onStatus: (status) => setSim(status),
+    onEvent: (event) => {
+      if (event.eventType === "board") {
+        void fetch("/api/sim/board-meeting", { cache: "no-store" })
+          .then(r => r.json())
+          .then((data: { meeting: { day: number } | null }) => setBoardPending(data.meeting !== null));
+      }
+      if (event.eventType === "settlement") setBoardPending(false);
+    },
+  });
 
   const isRunning = sim?.status === "running";
   const canRun    = !isRunning && !boardPending;
@@ -49,56 +62,115 @@ export function SimControlBar() {
       if (r.ok) setSim(await r.json());
     }, 600);
   }
-  async function advance() {
-    if (!canRun) return;
-    const nextDay = (sim?.day ?? 0) + 1;
-    router.push(`/dashboard/work?day=${nextDay}`);
-    await fetch("/api/sim/advance", { method: "POST" });
-  }
-  async function stop() { await fetch("/api/sim/stop", { method: "POST" }); }
 
   return (
     <div className="flex items-center gap-2">
       <span className={cn(
-        "rounded px-2 py-0.5 text-[10px] font-bold uppercase",
-        isRunning           ? "bg-mint animate-pulse text-white" :
+        "relative overflow-hidden rounded px-2 py-0.5 text-[10px] font-bold uppercase",
+        isRunning           ? "bg-mint text-white shadow-[0_0_18px_rgba(46,158,107,0.35)]" :
         sim?.status === "paused" ? "bg-signal text-ink" :
         boardPending        ? "bg-amber-400 text-amber-900" :
         "bg-paper/15 text-paper/50"
       )}>
+        {isRunning && <span className="absolute inset-y-0 left-0 w-8 animate-time-sweep bg-white/25" />}
         {boardPending && !isRunning ? "待决策" : (sim?.status ?? "…")}
       </span>
-      {sim?.day && <span className="text-xs text-paper/40">Day {sim.day}</span>}
-      <div className="flex gap-1">
-        <button
-          onClick={() => run(1)}
-          disabled={!canRun}
-          title={boardPending ? "请先完成董事会决策" : "运行 1 天"}
-          className={cn(
-            "flex items-center gap-1 rounded px-2.5 py-1 text-[11px] font-bold transition-opacity",
-            canRun ? "bg-signal text-ink hover:bg-signal/80" : "bg-signal/30 text-ink/40 cursor-not-allowed"
-          )}>
-          <Play className="h-3 w-3" />1天
-        </button>
-        <button
-          onClick={() => run(3)}
-          disabled={!canRun}
-          title={boardPending ? "请先完成董事会决策" : "运行 3 天"}
-          className={cn(
-            "flex items-center gap-1 rounded px-2.5 py-1 text-[11px] font-bold transition-opacity",
-            canRun ? "bg-signal/70 text-ink hover:bg-signal/50" : "bg-signal/20 text-ink/40 cursor-not-allowed"
-          )}>
-          <Play className="h-3 w-3" />3天
-        </button>
-        <button onClick={advance} title="推进一步"
-          className="rounded border border-paper/20 px-2.5 py-1 text-[11px] text-paper/70 hover:bg-paper/10">
-          推进
-        </button>
-        <button onClick={stop} title="暂停"
-          className="rounded border border-paper/20 px-2 py-1 text-paper/70 hover:bg-paper/10">
-          <Square className="h-3 w-3" />
-        </button>
-      </div>
+      <button
+        onClick={() => run(1)}
+        disabled={!canRun}
+        title={boardPending ? "请先完成董事会决策" : "推进 1 天"}
+        className={cn(
+          "relative flex items-center gap-1 overflow-hidden rounded px-2.5 py-1 text-[11px] font-bold transition-opacity",
+          canRun ? "bg-signal text-ink hover:bg-signal/80" :
+          isRunning ? "border border-mint/40 bg-mint/15 text-paper/70 cursor-wait" :
+          "bg-signal/30 text-ink/40 cursor-not-allowed"
+        )}>
+        {isRunning && <span className="absolute inset-y-0 left-0 w-8 animate-time-sweep bg-white/20" />}
+        <Play className="h-3 w-3" />推进 1 天
+      </button>
+    </div>
+  );
+}
+
+// ─── Calendar picker ──────────────────────────────────────────────────────────
+
+function DayCalendarPicker({
+  allDays,
+  currentDay,
+  runningDay,
+  onSelect,
+}: {
+  allDays: { day: number; isBoardDay: boolean }[];
+  currentDay: number;
+  runningDay: number | null;
+  onSelect: (day: number) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  // Close on outside click
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e: MouseEvent) => {
+      if (!ref.current?.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [open]);
+
+  // Sim day ↔ local Date (Day 1 = June 1 2026 local midnight)
+  const dayToLocal = (day: number) => new Date(2026, 5, day);
+  const localToDay = (d: Date) =>
+    Math.round((new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime() - new Date(2026, 5, 1).getTime()) / 86_400_000) + 1;
+
+  const enabledSet  = new Set(allDays.map(d => d.day));
+  const selected    = dayToLocal(currentDay);
+  const isLive      = !!runningDay;
+
+  return (
+    <div ref={ref} className="relative">
+      {/* Trigger button */}
+      <button
+        onClick={() => setOpen(o => !o)}
+        className={cn(
+          "flex items-center gap-1.5 rounded border px-2.5 py-1 text-xs font-medium transition-colors select-none",
+          open
+            ? "border-paper/40 bg-paper/20 text-paper"
+            : isLive
+            ? "animate-time-glow border-mint/60 bg-mint/15 text-paper"
+            : "border-paper/20 bg-paper/10 text-paper/80 hover:border-paper/40 hover:text-paper"
+        )}
+      >
+        <CalendarDays className="h-3.5 w-3.5 shrink-0" />
+        <span>{dayToShortDate(currentDay)}</span>
+        <span className="text-paper/35">D{currentDay}</span>
+      </button>
+
+      {/* Calendar popup */}
+      {open && (
+        <div className="rdp-dark absolute right-0 top-full z-50 mt-1.5 rounded-xl border border-white/10 bg-[#1c2434] p-1 shadow-2xl shadow-black/60">
+          <DayPicker
+            mode="single"
+            locale={zhCN}
+            selected={selected}
+            defaultMonth={selected}
+            startMonth={new Date(2026, 5, 1)}
+            endMonth={new Date(2028, 11, 31)}
+            onSelect={(date) => {
+              if (!date) return;
+              const day = localToDay(date);
+              if (enabledSet.has(day)) { onSelect(day); setOpen(false); }
+            }}
+            disabled={(date) => !enabledSet.has(localToDay(date))}
+            modifiersClassNames={{
+              isBoardDay: "font-black",
+            }}
+            modifiers={{
+              isBoardDay: allDays.filter(d => d.isBoardDay).map(d => dayToLocal(d.day)),
+            }}
+          />
+        </div>
+      )}
     </div>
   );
 }
@@ -109,23 +181,33 @@ export function DaySwitcher({ days }: { days: { day: number; isBoardDay: boolean
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
+  const [liveDays, setLiveDays] = useState(days);
   const [runningDay, setRunningDay] = useState<number | null>(null);
 
-  // Poll sim status to surface the currently-running day even before it completes
+  useEffect(() => setLiveDays(days), [days]);
+
   useEffect(() => {
-    const poll = async () => {
-      const r = await fetch("/api/sim/status", { cache: "no-store" });
-      if (!r.ok) return;
-      const st = await r.json() as { day: number; status: string };
-      setRunningDay(st.status === "running" ? st.day : null);
-    };
-    void poll();
-    const t = setInterval(poll, 3000);
-    return () => clearInterval(t);
+    fetch("/api/sim/status", { cache: "no-store" })
+      .then(r => r.ok ? r.json() : null)
+      .then((status: SimStatusSnapshot | null) => {
+        setRunningDay(status?.status === "running" ? status.day : null);
+      });
   }, []);
 
+  useSimStream({
+    onStatus: (status) => {
+      setRunningDay(status.status === "running" ? status.day : null);
+    },
+    onEvent: (event) => {
+      if (event.eventType !== "settlement") return;
+      void fetch("/api/days", { cache: "no-store" })
+        .then(r => r.json())
+        .then((data: { days: { day: number; isBoardDay: boolean }[] }) => setLiveDays(data.days ?? []));
+    },
+  });
+
   // Merge: completed days from SSR + live running day (if not already present)
-  const allDays = [...days];
+  const allDays = [...liveDays];
   if (runningDay && !allDays.find(d => d.day === runningDay)) {
     allDays.unshift({ day: runningDay, isBoardDay: false });
   }
@@ -145,26 +227,37 @@ export function DaySwitcher({ days }: { days: { day: number; isBoardDay: boolean
   const next = allDays[idx - 1];
 
   return (
-    <div className="flex items-center gap-1.5">
-      <span className="text-[10px] font-bold uppercase tracking-wider text-paper/40">时间</span>
-      <select
-        value={currentDay}
-        onChange={e => go(Number(e.target.value))}
-        className="rounded border border-paper/20 bg-paper/10 px-2 py-0.5 text-xs text-paper/80 focus:outline-none"
-      >
-        {allDays.map(d => (
-          <option key={d.day} value={d.day} className="bg-ink text-paper">
-            {d.isBoardDay ? "★ " : ""}
-            {d.day === runningDay && !days.find(c => c.day === d.day) ? "⏺ " : ""}
-            {dayToShortDate(d.day)} (D{d.day})
-          </option>
-        ))}
-      </select>
-      {allDays.length > 1 && (
-        <div className="flex gap-0.5">
-          {prev && <button onClick={() => go(prev.day)} className="rounded px-1.5 py-0.5 text-xs text-paper/50 hover:text-paper">‹</button>}
-          {next && <button onClick={() => go(next.day)} className="rounded px-1.5 py-0.5 text-xs text-paper/50 hover:text-paper">›</button>}
-        </div>
+    <div className="flex items-center gap-1">
+      {/* 前一天 — only shown if older day exists */}
+      {prev ? (
+        <button
+          onClick={() => go(prev.day)}
+          className="rounded border border-paper/20 px-2 py-1 text-[11px] text-paper/60 hover:border-paper/40 hover:text-paper transition-colors"
+        >
+          前一天
+        </button>
+      ) : (
+        <span className="w-[54px]" />
+      )}
+
+      {/* Calendar date picker */}
+      <DayCalendarPicker
+        allDays={allDays}
+        currentDay={currentDay}
+        runningDay={runningDay}
+        onSelect={go}
+      />
+
+      {/* 后一天 — only shown if newer day exists */}
+      {next ? (
+        <button
+          onClick={() => go(next.day)}
+          className="rounded border border-paper/20 px-2 py-1 text-[11px] text-paper/60 hover:border-paper/40 hover:text-paper transition-colors"
+        >
+          后一天
+        </button>
+      ) : (
+        <span className="w-[54px]" />
       )}
     </div>
   );
@@ -176,12 +269,14 @@ const NAV_GROUPS = [
   {
     label: "主菜单",
     items: [
-      { href: "/dashboard",        label: "总览",    Icon: Home },
-      { href: "/dashboard/work",   label: "工作日志", Icon: Bot },
-      { href: "/dashboard/org",    label: "组织架构", Icon: LayoutGrid },
-      { href: "/dashboard/rules",  label: "规则",    Icon: Shield },
-      { href: "/dashboard/hr",     label: "人才市场", Icon: Users },
-      { href: "/dashboard/tools",  label: "工具目录", Icon: Wrench },
+      { href: "/dashboard",            label: "总览",    Icon: Home },
+      { href: "/dashboard/work",       label: "工作日志", Icon: Bot },
+      { href: "/dashboard/settlement", label: "财务日报", Icon: Receipt },
+      { href: "/dashboard/org",        label: "组织架构", Icon: LayoutGrid },
+      { href: "/dashboard/rules",      label: "规则",    Icon: Shield },
+      { href: "/dashboard/hr",         label: "人才市场", Icon: Users },
+      { href: "/dashboard/tools",      label: "工具目录", Icon: Wrench },
+      { href: "/dashboard/system",     label: "系统",    Icon: Settings },
     ],
   },
   {

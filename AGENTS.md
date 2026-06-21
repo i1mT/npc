@@ -39,6 +39,7 @@ NPC_*.md                早期产品、架构、技术和 UI 设计原始文档
 - 模拟引擎：`src/simulation/engine.ts` 管理 `idle/running/paused` 状态，并推进每日工作流。
 - Agent 工作流：`src/mastra/workflows/daily-workflow.ts` 驱动总编、编辑、工具调用、发布、结算、增长协议和董事会日逻辑。
 - 真实 LLM 协作：`src/mastra/runtime/evomap-model.ts` 通过 EVOMAP OpenAI-compatible Chat Completions 接入模型，`src/mastra/collaboration.ts` 负责 Mastra Agent 对话、结构化输出、重试、token/cost 记录和错误事件。
+- EvoMap 进化能力：`src/mastra/tools/evomap/` 通过 Developer OAuth2 + PKCE 读取 EvoMap recipes、genes 和 reuse graph，工具页 `/dashboard/tools` 负责连接状态与授权入口。
 - Agent 记忆：`src/mastra/runtime/memory.ts` 使用 Mastra Memory、LibSQLStore 和 LibSQLVector 持久化线程上下文，默认落在 `memory.db`。
 - 组织增长：每日增长协议会根据 DAU 和收入阈值触发增长、商业化或栏目角色扩编，并从下一天起纳入 Agent 协作。
 - 数据层：`sim.db` 保存模拟状态、`work_events`、文章、董事会、七层快照和变更；外部文章源由 `src/db/articles.ts` 读取。

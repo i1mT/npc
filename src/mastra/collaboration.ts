@@ -6,7 +6,7 @@ import { logEvent } from "@/simulation/mock-apis";
 import type { z } from "zod";
 
 type Mention = { agentId: string; agentName: string };
-type ToolSummary = { tool: string; input: string; result: string };
+type ToolSummary = { tool: string; input: string; result: string; rawData?: unknown };
 type UsageLike = {
   inputTokens?: number;
   outputTokens?: number;

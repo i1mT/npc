@@ -1,12 +1,14 @@
 import { TOOL_META, TOOL_GRANTS_BY_ROLE } from "@/mastra/tools/npc-tools";
 import type { ToolName } from "@/mastra/tools/npc-tools";
+import { EvoMapConnectPanel } from "@/components/evomap-connect-panel";
 import Link from "next/link";
 import { ArrowLeft, Wrench } from "lucide-react";
 
 export const dynamic = "force-dynamic";
 
-const CATEGORY_ORDER = ["内容", "数据", "记忆", "组织", "治理", "商业"];
+const CATEGORY_ORDER = ["EvoMap 进化能力", "内容", "数据", "记忆", "组织", "治理", "商业"];
 const CATEGORY_COLOR: Record<string, string> = {
+  "EvoMap 进化能力": "bg-cyan-100 text-cyan-800",
   内容: "bg-cobalt/10 text-cobalt",
   数据: "bg-mint/15 text-green-700",
   记忆: "bg-purple-100 text-purple-700",
@@ -55,6 +57,8 @@ export default function ToolsPage() {
             <p className="text-xs text-ink/45 mt-0.5">共 {totalTools} 个工具，按角色权限分配给不同 Agent</p>
           </div>
         </div>
+
+        <EvoMapConnectPanel />
 
         {/* Role permission matrix */}
         <section>

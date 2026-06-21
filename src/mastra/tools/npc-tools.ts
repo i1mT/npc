@@ -17,10 +17,16 @@ import {
   publishArticles as dbPublishArticles,
   usedSourceIds,
 } from "@/db/sim";
-import { getSimDb } from "@/db/connection";
+import { getSimDb, upsertSoulSnapshot } from "@/db/connection";
 import { getTopicPerformanceLast7Days } from "@/db/memory-queries";
 import { logEvent } from "@/simulation/mock-apis";
 import type { CollaborationRuntime } from "@/mastra/collaboration";
+import {
+  EVOMAP_TOOL_FACTORIES,
+  EVOMAP_TOOL_META,
+  EVOMAP_TOOL_NAMES,
+  type EvomapToolName,
+} from "@/mastra/tools/evomap/tools";
 
 // ─── Context type ─────────────────────────────────────────────────────────────
 
@@ -44,6 +50,14 @@ function log(ctx: AgentToolCtx, tool: string, input: string, result: string) {
     content: result,
     metadata: { toolSummary: { tool, input, result } },
   });
+}
+
+function snapshotSoulMemory(ctx: AgentToolCtx) {
+  const row = getSimDb()
+    .prepare("SELECT id, soul, memory FROM employees WHERE agent_handle = ?")
+    .get(ctx.agentHandle) as { id: string; soul: string | null; memory: string | null } | undefined;
+  if (!row) return;
+  upsertSoulSnapshot(row.id, ctx.day, row.soul ?? "", row.memory ?? "");
 }
 
 // ─── Content tools ─────────────────────────────────────────────────────────────
@@ -209,6 +223,7 @@ function makeWriteMemory(ctx: AgentToolCtx) {
       const db = getSimDb();
       const trimmed = args.memory.slice(0, MEMORY_MAX_CHARS);
       db.prepare("UPDATE employees SET memory = ? WHERE agent_handle = ?").run(trimmed, ctx.agentHandle);
+      snapshotSoulMemory(ctx);
       logEvent({
         day: ctx.day, agentId: ctx.agentHandle, agentName: ctx.agentName,
         eventType: "memory_write",
@@ -234,6 +249,7 @@ function makeUpdateMySoul(ctx: AgentToolCtx) {
     execute: async (args: { soul: string; reason: string }) => {
       const db = getSimDb();
       db.prepare("UPDATE employees SET soul = ? WHERE agent_handle = ?").run(args.soul, ctx.agentHandle);
+      snapshotSoulMemory(ctx);
       logEvent({
         day: ctx.day, agentId: ctx.agentHandle, agentName: ctx.agentName,
         eventType: "memory_write",
@@ -285,7 +301,16 @@ function makeHireEmployee(ctx: AgentToolCtx) {
       const db = getSimDb();
       const roleKey = args.role_template as keyof typeof TOOL_GRANTS_BY_ROLE;
       const grantedTools = JSON.stringify(TOOL_GRANTS_BY_ROLE[roleKey] ?? TOOL_GRANTS_BY_ROLE.editor);
-      const handle = `${args.role_template.replace("_", "-")}-${randomUUID().slice(0, 8)}`;
+      // Use role-consistent handles so @mention routing always works.
+      // Specialized roles get a fixed handle (matching the ROLE_LABELS map in agentic-day);
+      // extra editors get unique handles to allow multiples.
+      const FIXED_HANDLES: Partial<Record<string, string>> = {
+        "growth":          "growth-agent",
+        "business":        "business-agent",
+        "column":          "column-agent",
+        "editor_in_chief": "editor-in-chief",
+      };
+      const handle = FIXED_HANDLES[args.role_template] ?? `${args.role_template.replace("_", "-")}-${randomUUID().slice(0, 8)}`;
       const id = randomUUID();
       db.prepare(
         `INSERT INTO employees (id, display_name, role_template, status, joined_day, system_prompt, soul, tools_granted, agent_handle, caused_by_event)
@@ -447,6 +472,10 @@ function makeRecordAdSale(ctx: AgentToolCtx) {
   });
 }
 
+// ─── Salary tools (imported) ──────────────────────────────────────────────────
+export { makeAdjustSalary } from "./salary-tools";
+import { makeAdjustSalary } from "./salary-tools";
+
 // ─── Resource/budget tools ─────────────────────────────────────────────────────
 
 function makeAuthorizeBudget(ctx: AgentToolCtx) {
@@ -481,7 +510,9 @@ export type ToolName =
   | "list_employees" | "hire_employee" | "fire_employee"
   | "update_vision" | "update_rules"
   | "get_ad_slots" | "record_ad_sale"
-  | "authorize_budget";
+  | "authorize_budget"
+  | "adjust_salary"
+  | EvomapToolName;
 
 type ToolFactory = (ctx: AgentToolCtx) => ReturnType<typeof createTool>;
 
@@ -501,6 +532,8 @@ const ALL_TOOL_FACTORIES: Record<ToolName, ToolFactory> = {
   get_ad_slots:     makeGetAdSlots,
   record_ad_sale:   makeRecordAdSale,
   authorize_budget: makeAuthorizeBudget,
+  adjust_salary:    makeAdjustSalary,
+  ...EVOMAP_TOOL_FACTORIES,
 };
 
 /** Tools each role is permitted to call. */
@@ -512,6 +545,7 @@ export const TOOL_GRANTS_BY_ROLE: Record<string, ToolName[]> = {
     "update_vision", "update_rules",
     "fetch_articles",
     "authorize_budget",
+    ...EVOMAP_TOOL_NAMES,
   ],
   editor_in_chief: [
     "fetch_articles",
@@ -519,24 +553,30 @@ export const TOOL_GRANTS_BY_ROLE: Record<string, ToolName[]> = {
     "read_memory", "write_memory", "update_my_soul",
     "list_employees", "hire_employee",
     "authorize_budget",
+    "adjust_salary",
+    ...EVOMAP_TOOL_NAMES,
   ],
   editor: [
     "fetch_articles", "publish_articles",
     "read_memory", "write_memory", "update_my_soul",
+    ...EVOMAP_TOOL_NAMES,
   ],
   growth: [
     "get_metrics", "get_revenue",
     "read_memory", "write_memory", "update_my_soul",
+    ...EVOMAP_TOOL_NAMES,
   ],
   business: [
     "get_metrics", "get_revenue",
     "get_ad_slots", "record_ad_sale",
     "read_memory", "write_memory", "update_my_soul",
     "authorize_budget",
+    ...EVOMAP_TOOL_NAMES,
   ],
   column: [
     "fetch_articles",
     "read_memory", "write_memory", "update_my_soul",
+    ...EVOMAP_TOOL_NAMES,
   ],
 };
 
@@ -572,4 +612,6 @@ export const TOOL_META: Record<ToolName, { displayName: string; category: string
   get_ad_slots:     { displayName: "查看广告位",     category: "商业",   description: "获取可用广告位列表及当前 CPM 基准价格",                                         rolesWithAccess: ["business"] },
   record_ad_sale:   { displayName: "记录广告合同",   category: "商业",   description: "记录一笔广告销售合同，更新 ad_placements 表和当日收入",                          rolesWithAccess: ["business"] },
   authorize_budget: { displayName: "审批支出预算",   category: "商业",   description: "审批运营支出（工具订阅、市场活动等）并记录到日志",                              rolesWithAccess: ["editor_in_chief", "business", "ceo"] },
+  adjust_salary:    { displayName: "调整员工薪资",   category: "组织",   description: "涨薪或降薪，执行后更新目标员工记忆，触发其认知更新",                               rolesWithAccess: ["editor_in_chief", "ceo"] },
+  ...EVOMAP_TOOL_META,
 };

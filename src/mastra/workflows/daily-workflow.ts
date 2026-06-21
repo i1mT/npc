@@ -12,7 +12,7 @@ import { boardWorkflow, generateWeeklyReportForBoard } from "@/mastra/workflows/
 import { agendaPrompt, draftPrompt, editorNotePrompt, formatTopicHistory, growthPrompt, growthThresholdHint, reviewPrompt, revisePrompt, socialPrompt } from "@/mastra/workflows/daily-prompts";
 import type { RoleTemplateName } from "@/mastra/role-templates";
 import { agentMeta, logEvent } from "@/simulation/mock-apis";
-import { adRevenue, nextCapital, nextDAU, nextReputation, nextSubscribers, socialReach } from "@/simulation/formulas";
+import { adRevenue, nextCapital, nextDAU, nextReputation, nextSubscribers, socialReach, subscriptionRevenue } from "@/simulation/formulas";
 
 type GrowthRole = Extract<RoleTemplateName, "growth" | "business" | "column">;
 
@@ -64,6 +64,7 @@ export async function runDailyWorkflow(day: number): Promise<DayState> {
       tool: queryArticlesTool.name,
       input: `Day ${day}，limit=30，主题=${agenda.focusTopics.join("、")}`,
       result: `得到 ${sources.length} 篇候选；前 5 个来源：${sources.slice(0, 5).map((source) => source.id).join("、")}`,
+      rawData: sources.map(s => ({ id: s.id, title: s.title, summary: (s.summary ?? "").slice(0, 150), tags: s.tags.slice(0, 5), pubDate: s.pubDate })),
     },
     prompt: `工具返回 ${sources.length} 篇候选文章。请向总编简要说明你会如何按议程筛选，不要输出 JSON。`,
   });
@@ -131,33 +132,36 @@ export async function runDailyWorkflow(day: number): Promise<DayState> {
 
   console.log(`[daily-workflow] day ${day} publish`);
   const publishResult = await publishArticleTool.execute({ articles: drafts });
-  const publishStep = await runTextStep({
-    day,
-    runtime: collaboration,
-    agentHandle: "editor",
-    eventType: "tool_result",
-    replyTo: reviewStep.event,
-    stepKind: "publish-summary",
-    toolSummary: {
-      tool: publishArticleTool.name,
-      input: `${drafts.length} 篇已审核稿件`,
-      result: `写入 ${publishResult.count} 篇已发布文章，并生成文章级记忆。`,
-    },
-    prompt: `已发布 ${publishResult.count} 篇文章：${publishResult.articles.map((article) => article.titleZh).join("；")}。请用具体标题向总编汇报发布结果。`,
-  });
+  const averageQuality = averageScore(drafts);
+  const baseReach = socialReach(averageQuality, base.reputation, drafts.length);
+  const [publishStep, growthReach] = await Promise.all([
+    runTextStep({
+      day,
+      runtime: collaboration,
+      agentHandle: "editor",
+      eventType: "tool_result",
+      replyTo: reviewStep.event,
+      stepKind: "publish-summary",
+      toolSummary: {
+        tool: publishArticleTool.name,
+        input: `${drafts.length} 篇已审核稿件`,
+        result: `写入 ${publishResult.count} 篇已发布文章，并生成文章级记忆。`,
+        rawData: publishResult.articles,
+      },
+      prompt: `已发布 ${publishResult.count} 篇文章：${publishResult.articles.map((article) => article.titleZh).join("；")}。请用具体标题向总编汇报发布结果。`,
+    }),
+    runGrowthDistributionIfAvailable(day, collaboration, publishResult.articles, baseReach),
+  ]);
   tokenTotal += stepTokens(publishStep);
   writeArticleMemory(day, publishResult.articles, publishStep.trace);
 
-  const averageQuality = averageScore(drafts);
-  const baseReach = socialReach(averageQuality, base.reputation, drafts.length);
-  const growthReach = await runGrowthDistributionIfAvailable(day, collaboration, publishResult.articles, baseReach);
   const reach = baseReach + growthReach;
   const dau = nextDAU(base.dau, averageQuality, reach);
   const reputation = nextReputation(base.reputation, averageQuality, review.decision === "approve");
   const revenue = adRevenue(dau, reputation);
   const cost = Number(Math.max(0.01, tokenTotal * 0.000002).toFixed(2));
   const subscribers = nextSubscribers(base.subscribers, dau, averageQuality);
-  const capital = nextCapital(base.capital, revenue, cost, drafts.length);
+  const capital = nextCapital(base.capital, revenue + subscriptionRevenue(subscribers), cost, drafts.length);
   const nextState: DayState = { day, capital, reputation, dau, subscribers, adRevenue: revenue, llmCost: cost, isBoardDay: day % 7 === 0 };
   upsertDay(nextState);
 

@@ -10,36 +10,65 @@ import { randomUUID } from "node:crypto";
 import { ensureBaselineData, getLatestDay, projectDay, recordDailySettlement, upsertDay, addLayerEvent } from "@/db/sim";
 import { getTopicPerformanceLast7Days } from "@/db/memory-queries";
 import { employeeExistsByRole, listActiveEmployeeLabels, spawnActiveEmployee } from "@/db/employees";
-import { getSimDb } from "@/db/connection";
+import { getSimDb, upsertSoulSnapshot } from "@/db/connection";
 import { updateDayEditorNote } from "@/db/day-notes";
 import type { DayState } from "@/lib/types";
+
+export class SimFatalError extends Error {
+  constructor(
+    public readonly agentHandle: string,
+    public readonly turnNumber: number,
+    public readonly cause: unknown,
+  ) {
+    super(`Agent ${agentHandle} turn ${turnNumber} fatal: ${cause instanceof Error ? cause.message : String(cause)}`);
+    this.name = "SimFatalError";
+  }
+}
 import { agentFactory } from "@/mastra/agent-factory";
 import { startDailyCollaboration, say, type CollaborationRuntime } from "@/mastra/collaboration";
 import { createToolsForTurn, type AgentToolCtx } from "@/mastra/tools/npc-tools";
 import { agentMeta, logEvent } from "@/simulation/mock-apis";
-import { adRevenue, nextCapital, nextDAU, nextReputation, nextSubscribers, socialReach } from "@/simulation/formulas";
+import { emitAgentStream } from "@/simulation/event-bus";
+import { adRevenue, nextCapital, nextDAU, nextReputation, nextSubscribers, socialReach, laborCost, subscriptionRevenue } from "@/simulation/formulas";
+import { runReaderAgent } from "@/mastra/workflows/reader-agent";
+import { getYesterdayFeedbackContext } from "@/db/feedback";
 import { boardWorkflow, generateWeeklyReportForBoard } from "@/mastra/workflows/board-meeting";
 import { suspendBoardWorkflowTool } from "@/mastra/tools/sim-tools";
 import type { RoleTemplateName } from "@/mastra/role-templates";
 
 // ─── @mention routing ─────────────────────────────────────────────────────────
 
-// Map from display mention to agent handle
-const MENTION_MAP: Record<string, string> = {
-  "总编": "editor-in-chief",
-  "总编辑": "editor-in-chief",
-  "编辑": "editor",
-  "增长": "growth-agent",
-  "商业": "business-agent",
-  "专栏": "column-agent",
+// Role-label → role_template mapping (constant)
+const ROLE_LABELS: Record<string, string[]> = {
+  "editor_in_chief": ["总编", "总编辑"],
+  "editor":          ["编辑"],
+  "growth":          ["增长"],
+  "business":        ["商业"],
+  "column":          ["专栏"],
 };
 
-function extractMentions(text: string): string[] {
-  const re = /@([^\s@，。！？,.\!\?]{1,8})/g;
+/**
+ * Build a live mention map from the current agent roster so that agents
+ * hired mid-day (with dynamic handles) are immediately reachable via @mention.
+ */
+function buildMentionMap(agents: Array<{ handle: string; displayName: string; roleTemplate: string }>): Record<string, string> {
+  const map: Record<string, string> = {};
+  for (const agent of agents) {
+    for (const label of ROLE_LABELS[agent.roleTemplate] ?? []) {
+      map[label] = agent.handle;
+    }
+    if (agent.displayName) map[agent.displayName] = agent.handle;
+    map[agent.handle] = agent.handle;
+  }
+  return map;
+}
+
+function extractMentions(text: string, mentionMap: Record<string, string>): string[] {
+  const re = /@([A-Za-z0-9_\-\u4e00-\u9fff]{1,16})/g;
   const handles: string[] = [];
   let m: RegExpExecArray | null;
   while ((m = re.exec(text)) !== null) {
-    const handle = MENTION_MAP[m[1]];
+    const handle = mentionMap[m[1]];
     if (handle) handles.push(handle);
   }
   return [...new Set(handles)];
@@ -70,12 +99,174 @@ function extractTokens(output: unknown): { input: number; output: number } {
   };
 }
 
+type StreamableAgent = {
+  stream: (prompt: string, options: unknown) => Promise<{
+    fullStream?: AsyncIterable<unknown> | ReadableStream<unknown>;
+    textStream?: AsyncIterable<string> | ReadableStream<string>;
+    text?: Promise<string> | string;
+    totalUsage?: Promise<Record<string, number>>;
+    usage?: Record<string, number>;
+  }>;
+};
+
+async function streamAgentTurn(input: {
+  agent: unknown;
+  prompt: string;
+  options: unknown;
+  day: number;
+  agentHandle: string;
+  agentName: string;
+  turn: number;
+}) {
+  const streamId = `agent-stream-${randomUUID()}`;
+  const agent = input.agent as Partial<StreamableAgent>;
+  if (typeof agent.stream !== "function") throw new Error("Mastra Agent.stream is not available.");
+
+  emitAgentStream({
+    streamId,
+    day: input.day,
+    agentId: input.agentHandle,
+    agentName: input.agentName,
+    eventType: "message",
+    content: "",
+    delta: "",
+    status: "start",
+    turn: input.turn,
+  });
+
+  try {
+    const output = await agent.stream(input.prompt, input.options);
+    let text = "";
+    if (output.fullStream) {
+      for await (const chunk of readUnknownStream(output.fullStream)) {
+        logLlmStreamChunk(input, chunk);
+        const delta = getTextDelta(chunk);
+        if (!delta) continue;
+        text += delta;
+        emitAgentStream({
+          streamId,
+          day: input.day,
+          agentId: input.agentHandle,
+          agentName: input.agentName,
+          eventType: "message",
+          content: text,
+          delta,
+          status: "delta",
+          turn: input.turn,
+        });
+      }
+    } else if (output.textStream) {
+      for await (const delta of readTextStream(output.textStream)) {
+        if (!delta) continue;
+        logLlmStreamChunk(input, { type: "text-delta", payload: { text: delta } });
+        text += delta;
+        emitAgentStream({
+          streamId,
+          day: input.day,
+          agentId: input.agentHandle,
+          agentName: input.agentName,
+          eventType: "message",
+          content: text,
+          delta,
+          status: "delta",
+          turn: input.turn,
+        });
+      }
+    }
+    if (!text && output.text) text = typeof output.text === "string" ? output.text : await output.text;
+    const usage = output.totalUsage ? await output.totalUsage.catch(() => undefined) : output.usage;
+    emitAgentStream({
+      streamId,
+      day: input.day,
+      agentId: input.agentHandle,
+      agentName: input.agentName,
+      eventType: "message",
+      content: text,
+      delta: "",
+      status: "done",
+      turn: input.turn,
+    });
+    return { text: text.trim(), output: { ...output, text, usage } };
+  } catch (error) {
+    emitAgentStream({
+      streamId,
+      day: input.day,
+      agentId: input.agentHandle,
+      agentName: input.agentName,
+      eventType: "message",
+      content: "",
+      delta: "",
+      status: "error",
+      turn: input.turn,
+    });
+    throw error;
+  }
+}
+
+type StreamChunk = {
+  type?: string;
+  payload?: {
+    text?: string;
+    delta?: string;
+    content?: string;
+  };
+  text?: string;
+  delta?: string;
+};
+
+function logLlmStreamChunk(input: { day: number; turn: number; agentHandle: string; agentName: string }, chunk: unknown) {
+  const c = chunk as StreamChunk;
+  const delta = getTextDelta(chunk);
+  if (delta) {
+    console.log(`[llm-stream][day=${input.day} turn=${input.turn} agent=${input.agentHandle}] ${JSON.stringify(delta)}`);
+    return;
+  }
+  if (c.type) {
+    console.log(`[llm-stream][day=${input.day} turn=${input.turn} agent=${input.agentHandle}] chunk=${c.type}`);
+  }
+}
+
+function getTextDelta(chunk: unknown) {
+  const c = chunk as StreamChunk;
+  if (c.type !== "text-delta" && !String(c.type ?? "").endsWith("text-delta")) return "";
+  return c.payload?.text ?? c.payload?.delta ?? c.payload?.content ?? c.text ?? c.delta ?? "";
+}
+
+async function* readTextStream(stream: AsyncIterable<string> | ReadableStream<string>) {
+  for await (const value of readUnknownStream(stream)) {
+    if (typeof value === "string") yield value;
+  }
+}
+
+async function* readUnknownStream<T>(stream: AsyncIterable<T> | ReadableStream<T>) {
+  if (Symbol.asyncIterator in stream) {
+    yield* stream as AsyncIterable<T>;
+    return;
+  }
+  const reader = (stream as ReadableStream<T>).getReader();
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      yield value;
+    }
+  } finally {
+    reader.releaseLock();
+  }
+}
+
 // ─── System prompt ────────────────────────────────────────────────────────────
 
-function buildSystemPrompt(day: number, state: DayState, topicHistory: string, teamLabels: string): string {
+function buildSystemPrompt(
+  day: number,
+  state: DayState,
+  topicHistory: string,
+  teamLabels: string,
+  feedbackCtx?: ReturnType<typeof getYesterdayFeedbackContext>,
+): string {
   const date = new Date(Date.UTC(2026, 5, day)); // Day 1 = 2026-06-01
   const dateStr = date.toISOString().slice(0, 10);
-  return [
+  const parts = [
     `今天是 Day ${day}（${dateStr}），AGI Daily 编辑部。`,
     `📊 当前指标：DAU ${state.dau.toLocaleString()}，声誉 ${state.reputation.toFixed(1)}，资金 ¥${Math.round(state.capital).toLocaleString()}`,
     `👥 当前团队：${teamLabels}`,
@@ -91,7 +282,20 @@ function buildSystemPrompt(day: number, state: DayState, topicHistory: string, t
     "",
     "【近期话题表现】",
     topicHistory || "（暂无历史数据，请根据当前趋势判断）",
-  ].join("\n");
+  ];
+  if (feedbackCtx) {
+    parts.push("", "【昨日读者反馈】");
+    parts.push(`整体满意度：${feedbackCtx.avgOverall.toFixed(1)}/10  最受好评：${feedbackCtx.bestArticleTitle}  最需改进：${feedbackCtx.worstArticleTitle}`);
+    if (feedbackCtx.topComments.length) {
+      parts.push("读者声音：");
+      feedbackCtx.topComments.forEach(c => parts.push(`  · ${c}`));
+    }
+    if (feedbackCtx.humanComments.length) {
+      parts.push("人类读者留言：");
+      feedbackCtx.humanComments.slice(0, 3).forEach(c => parts.push(`  · ${c.authorName}：${c.content.slice(0, 80)}`));
+    }
+  }
+  return parts.join("\n");
 }
 
 // ─── Agent turn prompts ───────────────────────────────────────────────────────
@@ -179,6 +383,15 @@ const TURN_TIMEOUT_MS = 120_000;
 
 type GrowthRole = Extract<RoleTemplateName, "growth" | "business" | "column">;
 
+type AgentTurnResult = {
+  handle: string;
+  agentName: string;
+  text: string;
+  mentions: string[];
+  tokens: { input: number; output: number };
+  turn: number;
+};
+
 export async function runAgenticDay(day: number): Promise<DayState> {
   ensureBaselineData();
   const runtime = startDailyCollaboration(day);
@@ -189,7 +402,8 @@ export async function runAgenticDay(day: number): Promise<DayState> {
 
   const topicHistory = formatTopicHistory(getTopicPerformanceLast7Days(day));
   const teamLabels   = listActiveEmployeeLabels().map(e => `${e.display_name}(${e.role_template})`).join("、");
-  const systemPrompt = buildSystemPrompt(day, base, topicHistory, teamLabels);
+  const feedbackCtx  = day > 1 ? getYesterdayFeedbackContext(day - 1) : null;
+  const systemPrompt = buildSystemPrompt(day, base, topicHistory, teamLabels, feedbackCtx ?? undefined);
 
   // Chat history accumulated as plain text lines (easier to pass to LLM)
   const chatLines: string[] = [systemPrompt, ""];
@@ -205,21 +419,19 @@ export async function runAgenticDay(day: number): Promise<DayState> {
   const agentQueue = runtime.agents.map(a => a.handle);
   if (!agentQueue.includes("editor-in-chief")) agentQueue.unshift("editor-in-chief");
 
-  let activeHandle = "editor-in-chief"; // Start with chief
-  let mentionedBy: string | undefined;
-  let lastMentions: string[] = [];
+  // Live mention map — rebuilt after each turn batch to include newly hired agents
+  let mentionMap = buildMentionMap(runtime.agents);
 
   console.log(`[agentic-day] day ${day} starting with ${agentQueue.length} agents`);
 
-  while (turn < MAX_TURNS && !publishCtx.done) {
-    turn++;
+  async function runAgentTurn(activeHandle: string, turnNumber: number, mentionedBy?: string, history = chatLines.join("\n")): Promise<AgentTurnResult | null> {
     const agent = agentFactory.getMastraAgent(activeHandle);
     const agentDef = runtime.agents.find(a => a.handle === activeHandle);
     const agentName = agentDef?.displayName ?? activeHandle;
 
-    console.log(`[agentic-day] day ${day} turn ${turn}: ${activeHandle} (${agentName})`);
+    console.log(`[agentic-day] day ${day} turn ${turnNumber}: ${activeHandle} (${agentName})`);
 
-    const turnPrompt = buildTurnPrompt(activeHandle, agentName, chatLines.join("\n"), mentionedBy);
+    const turnPrompt = buildTurnPrompt(activeHandle, agentName, history, mentionedBy);
 
     // Build per-turn context and toolset (tools are granted based on agent role)
     const agentDef2 = agentFactory.get(activeHandle);
@@ -235,128 +447,266 @@ export async function runAgenticDay(day: number): Promise<DayState> {
     const toolsets = createToolsForTurn(toolContext, agentDef2.grantedToolNames);
 
     let response: unknown;
+    let text = "";
     try {
-      response = await agent.generate(turnPrompt, {
-        toolsets,
-        memory: { thread: runtime.threadId, resource: `npc-agent-${activeHandle}` },
-        maxOutputTokens: EVOMAP_MAX_OUTPUT,
-        abortSignal: AbortSignal.timeout(TURN_TIMEOUT_MS),
-      } as never);
+      const streamed = await streamAgentTurn({
+        agent,
+        prompt: turnPrompt,
+        options: {
+          toolsets,
+          memory: { thread: runtime.threadId, resource: `npc-agent-${activeHandle}` },
+          maxOutputTokens: EVOMAP_MAX_OUTPUT,
+          abortSignal: AbortSignal.timeout(TURN_TIMEOUT_MS),
+        },
+        day,
+        agentHandle: activeHandle,
+        agentName,
+        turn: turnNumber,
+      });
+      response = streamed.output;
+      text = streamed.text;
     } catch (err) {
-      const errMsg = err instanceof Error ? err.message : String(err);
-      console.error(`[agentic-day] agent ${activeHandle} turn ${turn} error:`, errMsg);
-      logEvent({
+      console.warn(`[agentic-day] stream fallback for ${activeHandle} turn ${turnNumber}:`, err instanceof Error ? err.message : err);
+      const fallbackStreamId = `agent-stream-${randomUUID()}`;
+      emitAgentStream({
+        streamId: fallbackStreamId,
         day,
         agentId: activeHandle,
         agentName,
         eventType: "message",
-        content: `（${agentName} 第 ${turn} 轮遇到错误：${errMsg.slice(0, 120)}）`,
-        metadata: { source: "agentic-day", error: errMsg },
+        content: "",
+        delta: "",
+        status: "start",
+        turn: turnNumber,
       });
-      // Don't break — skip this agent turn and try routing to next
-      if (turn >= MAX_TURNS - 2) break;
-      const idx = agentQueue.indexOf(activeHandle);
-      activeHandle = agentQueue[(idx + 1) % agentQueue.length];
-      mentionedBy = undefined;
-      continue;
-    }
-
-    const tokens = extractTokens(response);
-    totalInputTokens  += tokens.input;
-    totalOutputTokens += tokens.output;
-
-    const text = extractText(response);
-    if (!text) continue;
-
-    // Append to shared chat log
-    chatLines.push(`【${agentName}】${text}`, "");
-
-    // Log as work event
-    const mentions = extractMentions(text);
-    say({
-      day,
-      runtime,
-      agentHandle: activeHandle,
-      eventType: "message",
-      content: text,
-      mentions: mentions.map(h => {
-        const a = runtime.agents.find(x => x.handle === h);
-        return { agentId: h, agentName: a?.displayName ?? h };
-      }),
-      extra: { mentions, turn },
-    });
-
-    lastMentions = mentions;
-
-    if (publishCtx.done) break;
-
-    // Route: follow @mention, or advance in queue
-    if (mentions.length > 0) {
-      // Route to first mentioned agent that exists
-      const next = mentions.find(h => agentQueue.includes(h) || h === "editor-in-chief" || h === "editor");
-      if (next) {
-        mentionedBy = agentName;
-        activeHandle = next;
-        continue;
+      try {
+        response = await agent.generate(turnPrompt, {
+          toolsets,
+          memory: { thread: runtime.threadId, resource: `npc-agent-${activeHandle}` },
+          maxOutputTokens: EVOMAP_MAX_OUTPUT,
+          abortSignal: AbortSignal.timeout(TURN_TIMEOUT_MS),
+        } as never);
+        text = extractText(response);
+        emitAgentStream({
+          streamId: fallbackStreamId,
+          day,
+          agentId: activeHandle,
+          agentName,
+          eventType: "message",
+          content: text,
+          delta: "",
+          status: "done",
+          turn: turnNumber,
+        });
+      } catch (err) {
+        emitAgentStream({
+          streamId: fallbackStreamId,
+          day,
+          agentId: activeHandle,
+          agentName,
+          eventType: "message",
+          content: "",
+          delta: "",
+          status: "error",
+          turn: turnNumber,
+        });
+        const errMsg = err instanceof Error ? err.message : String(err);
+        console.error(`[agentic-day] agent ${activeHandle} turn ${turnNumber} error:`, errMsg);
+        logEvent({
+          day,
+          agentId: activeHandle,
+          agentName,
+          eventType: "error",
+          content: `${agentName} 第 ${turnNumber} 轮执行失败：${errMsg.slice(0, 200)}`,
+          metadata: { source: "agentic-day", error: errMsg, turn: turnNumber },
+        });
+        throw new SimFatalError(activeHandle, turnNumber, err);
       }
     }
 
-    // No mention: advance to next in queue
-    const idx = agentQueue.indexOf(activeHandle);
-    activeHandle = agentQueue[(idx + 1) % agentQueue.length];
-    mentionedBy = undefined;
+    const tokens = extractTokens(response);
+    const mentions = extractMentions(text, mentionMap);
+    return { handle: activeHandle, agentName, text, mentions, tokens, turn: turnNumber };
+  }
+
+  const validAgentHandles = (handles: string[]) => [...new Set(handles)].filter(h => agentQueue.includes(h));
+  let nextHandles = ["editor-in-chief"];
+  let mentionSources = new Map<string, string | undefined>();
+
+  while (turn < MAX_TURNS && !publishCtx.done) {
+    const batchHandles = validAgentHandles(nextHandles);
+    const handlesToRun = batchHandles.length ? batchHandles : [agentQueue[0]];
+    const plannedTurns = handlesToRun.slice(0, MAX_TURNS - turn).map(handle => ({
+      handle,
+      mentionedBy: mentionSources.get(handle),
+      turnNumber: ++turn,
+    }));
+    const sharedHistory = chatLines.join("\n");
+
+    if (plannedTurns.length > 1) {
+      console.log(`[agentic-day] day ${day} parallel turns: ${plannedTurns.map(t => `${t.turnNumber}:${t.handle}`).join(", ")}`);
+    }
+
+    // SimFatalError propagates out of Promise.all and is caught in engine.ts
+    const results = (await Promise.all(plannedTurns.map(t => runAgentTurn(t.handle, t.turnNumber, t.mentionedBy, sharedHistory))))
+      .filter((result): result is AgentTurnResult => Boolean(result));
+
+    if (results.length === 0) {
+      const lastHandle = plannedTurns.at(-1)?.handle ?? agentQueue[0];
+      const idx = agentQueue.indexOf(lastHandle);
+      nextHandles = [agentQueue[(idx + 1) % agentQueue.length]];
+      mentionSources = new Map();
+      continue;
+    }
+
+    const mentionedHandles: string[] = [];
+    const nextMentionSources = new Map<string, string | undefined>();
+
+    for (const result of results.sort((a, b) => a.turn - b.turn)) {
+      totalInputTokens  += result.tokens.input;
+      totalOutputTokens += result.tokens.output;
+      if (!result.text) continue;
+
+      chatLines.push(`【${result.agentName}】${result.text}`, "");
+      for (const handle of result.mentions) {
+        if (!agentQueue.includes(handle) || handle === result.handle) continue;
+        mentionedHandles.push(handle);
+        if (!nextMentionSources.has(handle)) nextMentionSources.set(handle, result.agentName);
+      }
+
+      say({
+        day,
+        runtime,
+        agentHandle: result.handle,
+        eventType: "message",
+        content: result.text,
+        mentions: result.mentions.map(h => {
+          const a = runtime.agents.find(x => x.handle === h);
+          return { agentId: h, agentName: a?.displayName ?? h };
+        }),
+        extra: { mentions: result.mentions, turn: result.turn },
+      });
+    }
+
+    if (publishCtx.done) break;
+
+    // Sync agents hired during this turn batch into the queue
+    {
+      const knownHandles = new Set(agentQueue);
+      const freshAgents = agentFactory.loadActiveEmployees();
+      for (const emp of freshAgents) {
+        if (!knownHandles.has(emp.handle)) {
+          agentQueue.push(emp.handle);
+          runtime.agents.push(emp);
+          console.log(`[agentic-day] day ${day}: new agent joined mid-day: ${emp.handle} (${emp.displayName})`);
+        }
+      }
+      // Rebuild mention map to include new agent labels and display names
+      mentionMap = buildMentionMap(runtime.agents);
+    }
+
+    const routedMentions = validAgentHandles(mentionedHandles);
+    if (routedMentions.length > 0) {
+      nextHandles = routedMentions;
+      mentionSources = nextMentionSources;
+      continue;
+    }
+
+    const lastHandle = plannedTurns.at(-1)?.handle ?? agentQueue[0];
+    const idx = agentQueue.indexOf(lastHandle);
+    nextHandles = [agentQueue[(idx + 1) % agentQueue.length]];
+    mentionSources = new Map();
   }
 
   // ─── Memory reflection (each agent reflects on the day before settlement) ──
 
   await runMemoryReflection(day, runtime, chatLines.join("\n"), publishCtx);
 
+  // ─── Reader Agent feedback (after publishing, before settlement) ──────────
+
+  let readerResult: { avgOverall: number; reviewCount: number } = { avgOverall: 0, reviewCount: 0 };
+  try {
+    readerResult = await runReaderAgent(day, runtime);
+  } catch (err) {
+    console.warn("[reader-agent] failed:", err instanceof Error ? err.message : err);
+  }
+
   // ─── Settlement ───────────────────────────────────────────────────────────
 
   const tokenTotal = totalInputTokens + totalOutputTokens;
   const averageQuality = publishCtx.count > 0 ? publishCtx.totalQuality / publishCtx.count : 6.5;
-  const baseReach = socialReach(averageQuality, base.reputation, publishCtx.count || 5);
 
-  // Growth agent social boost if available
+  // Quality momentum: weight current quality with past 3 days (涟漪效应)
+  const db = getSimDb();
+  const pastDays = db.prepare("SELECT avg_quality FROM sim_days WHERE day < ? AND avg_quality > 0 ORDER BY day DESC LIMIT 3").all(day) as { avg_quality: number }[];
+  const qualityMomentum = pastDays.length > 0
+    ? pastDays.reduce((s, r) => s + r.avg_quality, 0) / pastDays.length
+    : averageQuality;
+  const effectiveQuality = averageQuality * 0.4 + qualityMomentum * 0.6;
+
+  const baseReach = socialReach(effectiveQuality, base.reputation, publishCtx.count || 5);
+
+  // Growth agent social boost scales with quality momentum
   let growthBoost = 0;
   if (runtime.agents.some(a => a.roleTemplate === "growth")) {
-    growthBoost = Math.round(baseReach * 0.35);
+    growthBoost = Math.round(baseReach * 0.35 * Math.min(1.25, qualityMomentum / 7));
   }
   const reach = baseReach + growthBoost;
 
-  const dau         = nextDAU(base.dau, averageQuality, reach);
+  const readerScore = readerResult.reviewCount > 0 ? readerResult.avgOverall : undefined;
+  const dau         = nextDAU(base.dau, effectiveQuality, reach, readerScore);
   const reputation  = nextReputation(base.reputation, averageQuality, publishCtx.count >= 8);
-  const revenue     = adRevenue(dau, reputation);
+
+  // Advertising revenue: organic (CPM-tiered) + contract (Agent-negotiated placements)
+  const placementRow = db.prepare("SELECT COALESCE(SUM(revenue), 0) AS total FROM ad_placements WHERE day = ?").get(day) as { total: number };
+  const contractAdRevenue = Number(placementRow.total.toFixed(2));
+  const organicAdRevenue  = adRevenue(dau, reputation);
+  const totalAdRevenue    = Number((contractAdRevenue + organicAdRevenue).toFixed(2));
+
   const cost        = Number(Math.max(0.01, tokenTotal * 0.000002).toFixed(2));
   const subscribers = nextSubscribers(base.subscribers, dau, averageQuality);
-  const capital     = nextCapital(base.capital, revenue, cost, publishCtx.count);
 
-  const nextState: DayState = { day, capital, reputation, dau, subscribers, adRevenue: revenue, llmCost: cost, isBoardDay: day % 7 === 0 };
-  upsertDay(nextState);
+  // Calculate labor cost from active employees
+  const activeEmps = db.prepare("SELECT daily_salary FROM employees WHERE status = 'active'").all() as { daily_salary: number }[];
+  const laborCostAmount = laborCost(activeEmps);
+
+  const capital = nextCapital(base.capital, totalAdRevenue + subscriptionRevenue(subscribers), cost + laborCostAmount, publishCtx.count);
+
+  const nextState: DayState = { day, capital, reputation, dau, subscribers, adRevenue: totalAdRevenue, llmCost: cost, isBoardDay: day % 7 === 0 };
+  upsertDay({ ...nextState, laborCost: laborCostAmount, avgQuality: averageQuality });
 
   // Settlement event
+  const chiefName = runtime.agents.find(a => a.handle === "editor-in-chief")?.displayName ?? "总编 Agent";
+  const adSummary = contractAdRevenue > 0
+    ? `有机广告 ¥${organicAdRevenue.toFixed(2)} + 合同广告 ¥${contractAdRevenue.toFixed(2)}`
+    : `有机广告 ¥${organicAdRevenue.toFixed(2)}`;
   const settlementEvent = addLayerEvent({
     day,
     actorId: "editor-in-chief",
-    actorName: runtime.agents.find(a => a.handle === "editor-in-chief")?.displayName ?? "总编 Agent",
+    actorName: chiefName,
     layer: "resource",
     eventType: "settlement",
     action: "daily_settlement",
-    content: `资源织网结算：Turn ${turn}，发布 ${publishCtx.count} 篇，DAU ${dau}，Reputation ${reputation.toFixed(1)}，广告收入 ¥${revenue}。`,
-    payload: { averageQuality, socialReach: reach, capital, subscribers, tokenTotal },
+    content: `资源织网结算：发布 ${publishCtx.count} 篇，DAU ${dau}，声誉 ${reputation.toFixed(1)}，广告收入 ¥${totalAdRevenue.toFixed(2)}（${adSummary}）。`,
+    payload: { averageQuality, qualityMomentum, socialReach: reach, capital, subscribers, tokenTotal, contractAdRevenue, organicAdRevenue },
   });
   logEvent({
     day,
     agentId: "editor-in-chief",
-    agentName: runtime.agents.find(a => a.handle === "editor-in-chief")?.displayName ?? "总编 Agent",
+    agentName: chiefName,
     eventType: "settlement",
-    content: `今日结算完成：发布 ${publishCtx.count} 篇，DAU ${dau.toLocaleString()}，Reputation ${reputation.toFixed(1)}，广告收入 ¥${revenue.toFixed(2)}，资金 ¥${Math.round(capital).toLocaleString()}。`,
-    metadata: { source: "agentic-day", toolSummary: { tool: "dailySettlement", input: `质量 ${averageQuality.toFixed(1)} 触达 ${reach}`, result: `DAU ${dau} Reputation ${reputation.toFixed(1)}` } },
+    content: `今日结算完成：发布 ${publishCtx.count} 篇，DAU ${dau.toLocaleString()}，声誉 ${reputation.toFixed(1)}，广告收入 ¥${totalAdRevenue.toFixed(2)}，资金 ¥${Math.round(capital).toLocaleString()}。`,
+    metadata: { source: "agentic-day", toolSummary: { tool: "dailySettlement", input: `质量 ${averageQuality.toFixed(1)} 动量 ${qualityMomentum.toFixed(1)} 触达 ${reach}`, result: `DAU ${dau} 声誉 ${reputation.toFixed(1)}` } },
   });
 
-  recordDailySettlement(nextState, previous, settlementEvent.id, { averageQuality, socialReach: reach });
+  recordDailySettlement(
+    { ...nextState, laborCost: laborCostAmount, contractAdRevenue, organicAdRevenue },
+    previous,
+    settlementEvent.id,
+    { averageQuality, socialReach: reach, readerScore },
+  );
   await writeEditorNote(day, runtime, publishCtx.titles, averageQuality, dau, reputation);
-  await runGrowthProtocol(day, runtime, { dau, reputation, capital, monthlyRevenue: revenue });
+  await runGrowthProtocol(day, runtime, { dau, reputation, capital, monthlyRevenue: totalAdRevenue });
   writeDailyLayerEvents(day, runtime, publishCtx.count, settlementEvent.id);
   projectDay(day);
 
@@ -520,7 +870,7 @@ async function runMemoryReflection(
     .slice(0, 12)
     .join("\n");
 
-  for (const agent of runtime.agents) {
+  await Promise.all(runtime.agents.map(async (agent) => {
     try {
       const mastraAgent = agentFactory.getMastraAgent(agent.handle);
       const agentDef = agentFactory.get(agent.handle);
@@ -573,8 +923,18 @@ async function runMemoryReflection(
       }
     } catch (err) {
       console.error(`[memory-reflection] ${agent.handle} failed:`, err instanceof Error ? err.message : err);
+    } finally {
+      snapshotAgentSoulMemory(agent.handle, day);
     }
-  }
+  }));
+}
+
+function snapshotAgentSoulMemory(agentHandle: string, day: number) {
+  const row = getSimDb()
+    .prepare("SELECT id, soul, memory FROM employees WHERE agent_handle = ?")
+    .get(agentHandle) as { id: string; soul: string | null; memory: string | null } | undefined;
+  if (!row) return;
+  upsertSoulSnapshot(row.id, day, row.soul ?? "", row.memory ?? "");
 }
 
 function formatTopicHistory(topics: ReturnType<typeof getTopicPerformanceLast7Days>) {

@@ -368,3 +368,30 @@ CREATE TABLE IF NOT EXISTS employee_soul_snapshots (
 
 CREATE INDEX IF NOT EXISTS idx_soul_snapshots_employee ON employee_soul_snapshots(employee_id, day);
 
+CREATE TABLE IF NOT EXISTS article_reviews (
+  id               TEXT PRIMARY KEY,
+  article_id       TEXT NOT NULL,
+  day              INTEGER NOT NULL,
+  score_info       REAL NOT NULL DEFAULT 0,
+  score_read       REAL NOT NULL DEFAULT 0,
+  score_timeliness REAL NOT NULL DEFAULT 0,
+  score_unique     REAL NOT NULL DEFAULT 0,
+  score_ai_rel     REAL NOT NULL DEFAULT 0,
+  score_overall    REAL NOT NULL DEFAULT 0,
+  comment          TEXT NOT NULL,
+  created_at       TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_article_reviews_day ON article_reviews(day);
+CREATE INDEX IF NOT EXISTS idx_article_reviews_article ON article_reviews(article_id);
+
+CREATE TABLE IF NOT EXISTS human_comments (
+  id          TEXT PRIMARY KEY,
+  article_id  TEXT NOT NULL,
+  day         INTEGER NOT NULL,
+  author_name TEXT NOT NULL,
+  content     TEXT NOT NULL,
+  created_at  TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_human_comments_article ON human_comments(article_id);
+CREATE INDEX IF NOT EXISTS idx_human_comments_day ON human_comments(day);
+

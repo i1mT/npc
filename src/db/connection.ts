@@ -59,6 +59,9 @@ function migrateAddedColumns(db: Database.Database) {
   addColumnIfMissing(db, "employees", "soul", "TEXT");
   addColumnIfMissing(db, "employees", "tools_granted", "TEXT");
   addColumnIfMissing(db, "employees", "memory", "TEXT");
+  addColumnIfMissing(db, "employees", "daily_salary", "REAL NOT NULL DEFAULT 300");
+  addColumnIfMissing(db, "sim_days", "labor_cost", "REAL NOT NULL DEFAULT 0");
+  addColumnIfMissing(db, "sim_days", "avg_quality", "REAL NOT NULL DEFAULT 0");
 }
 
 export function upsertSoulSnapshot(employeeId: string, day: number, soulMd: string, memoryMd: string) {
@@ -92,6 +95,45 @@ export function getArticleDb() {
   return articleDb;
 }
 
+export function rollbackToDay(targetDay: number) {
+  const db = getSimDb();
+  db.exec(`
+    DELETE FROM work_events WHERE day > ${targetDay};
+    DELETE FROM published_articles WHERE day > ${targetDay};
+    DELETE FROM daily_settlement WHERE day > ${targetDay};
+    DELETE FROM settlement_drivers WHERE day > ${targetDay};
+    DELETE FROM board_meetings WHERE day > ${targetDay};
+    DELETE FROM board_directives WHERE day > ${targetDay};
+    DELETE FROM article_reviews WHERE day > ${targetDay};
+    DELETE FROM human_comments WHERE day > ${targetDay};
+    DELETE FROM layer_snapshots WHERE day > ${targetDay};
+    DELETE FROM layer_changes WHERE day > ${targetDay};
+    DELETE FROM employee_soul_snapshots WHERE day > ${targetDay};
+    DELETE FROM growth_observations WHERE day > ${targetDay};
+    DELETE FROM growth_decisions WHERE decided_day > ${targetDay};
+    DELETE FROM growth_proposals WHERE day > ${targetDay};
+    DELETE FROM growth_signals WHERE day > ${targetDay};
+    DELETE FROM sim_days WHERE day > ${targetDay};
+    DELETE FROM employees WHERE joined_day > ${targetDay};
+  `);
+  // Restore resource_metrics to values at targetDay
+  const lastDay = db
+    .prepare("SELECT capital, reputation, dau, subscribers, ad_revenue FROM sim_days WHERE day = ?")
+    .get(targetDay) as { capital: number; reputation: number; dau: number; subscribers: number; ad_revenue: number } | undefined;
+  if (lastDay) {
+    db.prepare("INSERT OR REPLACE INTO resource_metrics (metric, value, updated_day) VALUES (?, ?, ?)")
+      .run("capital", lastDay.capital, targetDay);
+    db.prepare("INSERT OR REPLACE INTO resource_metrics (metric, value, updated_day) VALUES (?, ?, ?)")
+      .run("reputation", lastDay.reputation, targetDay);
+    db.prepare("INSERT OR REPLACE INTO resource_metrics (metric, value, updated_day) VALUES (?, ?, ?)")
+      .run("dau", lastDay.dau, targetDay);
+    db.prepare("INSERT OR REPLACE INTO resource_metrics (metric, value, updated_day) VALUES (?, ?, ?)")
+      .run("subscribers", lastDay.subscribers, targetDay);
+    db.prepare("INSERT OR REPLACE INTO resource_metrics (metric, value, updated_day) VALUES (?, ?, ?)")
+      .run("ad_revenue", lastDay.ad_revenue, targetDay);
+  }
+}
+
 export function resetSimDb() {
   const db = getSimDb();
   db.exec(`
@@ -120,6 +162,8 @@ export function resetSimDb() {
     DELETE FROM layer_snapshots;
     DELETE FROM work_events;
     DELETE FROM published_articles;
+    DELETE FROM article_reviews;
+    DELETE FROM human_comments;
     DELETE FROM sim_days;
     DELETE FROM sim_settings;
   `);

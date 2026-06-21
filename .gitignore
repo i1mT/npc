@@ -5,4 +5,5 @@ memory.db*
 *.log
 .env
 .env.local
+.evomap/
 agidaily.db

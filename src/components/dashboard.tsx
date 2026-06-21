@@ -4,12 +4,15 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
-  BarChart2, Bot, ChevronDown, ChevronRight, FileText,
+  Bot, ChevronDown, ChevronRight, FileText,
   Pause, Play, RefreshCw, RotateCcw, Star, TrendingUp, Users,
   Briefcase, UserPlus, AlertCircle, DollarSign,
+  BrainCircuit, CheckCircle2, MessageSquare, Wrench, Network,
 } from "lucide-react";
 import type { DaySummary, SimEvent } from "@/lib/types";
 import { cn } from "@/lib/utils";
+import { useSimStream, type AgentStreamUpdate, type SimStatusSnapshot } from "@/components/live-sim";
+import { TopologyTab } from "@/components/topology-tab";
 
 // ─── Typewriter hook ──────────────────────────────────────────────────────────
 
@@ -50,10 +53,13 @@ function TypewriterText({ text, active }: { text: string; active: boolean }) {
 // ─── Agent visual identity ────────────────────────────────────────────────────
 
 const AGENT: Record<string, { initial: string; bg: string; label: string }> = {
-  "editor-in-chief": { initial: "总", bg: "#254edb", label: "总编 Agent" },
-  "editor":          { initial: "编", bg: "#2e9e6b", label: "编辑 Agent" },
-  "growth-agent":    { initial: "G",  bg: "#c05621", label: "Growth Agent" },
+  "editor-in-chief": { initial: "总", bg: "#254edb", label: "总编" },
+  "editor":          { initial: "编", bg: "#2e9e6b", label: "编辑" },
+  "growth-agent":    { initial: "增", bg: "#c05621", label: "增长" },
+  "business-agent":  { initial: "商", bg: "#7c3aed", label: "商业" },
+  "column-agent":    { initial: "专", bg: "#0891b2", label: "专栏" },
   "board":           { initial: "董", bg: "#92400e", label: "董事会" },
+  "reader-agent":    { initial: "读", bg: "#be185d", label: "读者" },
 };
 
 function agentMeta(id: string) {
@@ -78,6 +84,10 @@ function AgentAvatar({ agentId, size = "md" }: { agentId: string; size?: "sm" | 
 function tryJson(s: string): Record<string, unknown> | null {
   if (!s || !s.startsWith("{")) return null;
   try { return JSON.parse(s) as Record<string, unknown>; } catch { return null; }
+}
+
+function isEvoMapTool(tool?: string | null) {
+  return Boolean(tool?.startsWith("evomap_"));
 }
 
 // Markdown renderer — used for all free-form agent text
@@ -210,10 +220,15 @@ function ContentRenderer({ event, typewrite }: { event: SimEvent; typewrite?: bo
     // Publish result gets article cards
     if (ts.tool === "publish_articles") return <PublishedArticlesCard meta={meta as Record<string, unknown>} ts={ts} />;
     const resultText = ts.result ?? event.content ?? "";
+    const isEvoMap = isEvoMapTool(ts.tool);
     return (
       <div className="space-y-1">
         <div className="flex items-center gap-1.5">
-          <code className="rounded bg-ink/6 px-2 py-0.5 text-[11px] font-mono font-bold text-ink/70">{ts.tool}()</code>
+          {isEvoMap && <span className="rounded bg-[#ecfeff] px-1.5 py-0.5 text-[10px] font-black text-[#155e75]">EvoMap</span>}
+          <code className={cn(
+            "rounded px-2 py-0.5 text-[11px] font-mono font-bold",
+            isEvoMap ? "bg-[#cffafe] text-[#155e75]" : "bg-ink/6 text-ink/70",
+          )}>{ts.tool}()</code>
           {ts.input && <span className="text-[11px] text-ink/35 truncate max-w-[200px]">{ts.input}</span>}
         </div>
         {resultText && <p className="text-xs text-ink/55 leading-5">{resultText}</p>}
@@ -308,6 +323,47 @@ function groupEvents(events: SimEvent[]): EventItem[] {
   return result;
 }
 
+function mergeEvents(...groups: SimEvent[][]) {
+  const byId = new Map<string, SimEvent>();
+  for (const group of groups) {
+    for (const event of group) byId.set(event.id, event);
+  }
+  return Array.from(byId.values()).sort((a, b) => a.day - b.day || a.seq - b.seq);
+}
+
+function streamUpdateToEvent(update: AgentStreamUpdate): SimEvent {
+  return {
+    id: update.streamId,
+    day: update.day,
+    seq: 100000 + (update.turn ?? 0),
+    agentId: update.agentId,
+    agentName: update.agentName,
+    eventType: update.eventType,
+    content: update.content,
+    metadata: { source: "agent-stream", status: update.status, turn: update.turn },
+    createdAt: new Date().toISOString(),
+  };
+}
+
+function shouldReplaceStreamWithEvent(ev: SimEvent) {
+  const type = ev.eventType as string;
+  return type === "message" || type === "decision" || type === "error";
+}
+
+function toolJson(ev: SimEvent) {
+  const meta = ev.metadata ?? {};
+  const ts = meta.toolSummary as { tool?: string; input?: string; result?: string; rawData?: unknown } | null;
+  return JSON.stringify({
+    type: ev.eventType,
+    seq: ev.seq,
+    tool: ts?.tool,
+    input: ts?.input,
+    result: ts?.result,
+    rawData: ts?.rawData ?? null,
+    metadata: meta,
+  }, null, 2);
+}
+
 // ─── Chat bubble ──────────────────────────────────────────────────────────────
 
 // ─── Collapsible tool calls under a message ───────────────────────────────────
@@ -315,30 +371,50 @@ function groupEvents(events: SimEvent[]): EventItem[] {
 function ToolCallList({ tools }: { tools: SimEvent[] }) {
   const [open, setOpen] = useState(false);
   if (!tools.length) return null;
+  const hasEvoMap = tools.some(ev => isEvoMapTool(((ev.metadata ?? {}).toolSummary as { tool?: string } | null)?.tool));
   return (
     <div className="mt-2 ml-1">
       <button
         onClick={() => setOpen(o => !o)}
-        className="flex items-center gap-1.5 rounded border border-rule bg-[#f5f5f2] px-2.5 py-1 text-xs text-ink/50 hover:border-ink/20 hover:text-ink/70 transition-colors"
+        className={cn(
+          "flex items-center gap-1.5 rounded border px-2.5 py-1 text-xs font-medium transition-colors",
+          hasEvoMap
+            ? "border-[#67e8f9] bg-[#ecfeff] text-[#155e75] hover:border-[#22d3ee]"
+            : "border-amber-200 bg-amber-50 text-amber-800 hover:border-amber-300",
+        )}
       >
         {open ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
-        <span className="font-mono">⚙</span>
-        {tools.length} 个工具调用
+        <Wrench className="h-3 w-3" />
+        {hasEvoMap ? "EvoMap / " : ""}{tools.length} 个工具调用
       </button>
       {open && (
-        <div className="mt-1.5 space-y-1.5 border-l-2 border-rule pl-3">
+        <div className={cn("mt-2 space-y-2 border-l-2 pl-3", hasEvoMap ? "border-[#67e8f9]" : "border-amber-200")}>
           {tools.map(ev => {
             const ts = (ev.metadata ?? {}).toolSummary as { tool?: string; input?: string; result?: string } | null;
+            const isEvoMap = isEvoMapTool(ts?.tool);
             return (
-              <div key={ev.id} className="rounded border border-rule/60 bg-[#f8f8f4] px-3 py-2">
+              <div key={ev.id} className={cn(
+                "rounded border px-3 py-2",
+                isEvoMap ? "border-[#67e8f9] bg-[#ecfeff]" : "border-amber-200 bg-[#fffaf0]",
+              )}>
                 <div className="flex items-center gap-2 mb-1">
-                  <code className="text-[11px] font-bold bg-ink/8 px-1.5 py-0.5 rounded text-ink/70">
+                  {isEvoMap && <span className="rounded bg-[#0891b2] px-1.5 py-0.5 text-[10px] font-black text-white">EvoMap</span>}
+                  <code className={cn(
+                    "text-[11px] font-bold bg-white px-1.5 py-0.5 rounded border",
+                    isEvoMap ? "text-[#155e75] border-[#67e8f9]" : "text-amber-900 border-amber-100",
+                  )}>
                     {ts?.tool ?? (ev.eventType as string)}()
                   </code>
                   <span className="text-[10px] text-ink/35">#{ev.seq}</span>
                 </div>
-                {ts?.input && <p className="text-[11px] text-ink/45 truncate">↑ {ts.input}</p>}
-                {ts?.result && <p className="text-[11px] text-ink/65 mt-0.5">↓ {ts.result}</p>}
+                {ts?.input && <p className="text-[11px] text-ink/50 truncate">input: {ts.input}</p>}
+                {ts?.result && <p className="text-[11px] text-ink/65 mt-0.5 line-clamp-2">result: {ts.result}</p>}
+                <pre className={cn(
+                  "mt-2 h-[300px] overflow-auto rounded border bg-white p-3 text-[11px] leading-5 text-ink/70",
+                  isEvoMap ? "border-[#67e8f9]" : "border-amber-100",
+                )}>
+                  {toolJson(ev)}
+                </pre>
               </div>
             );
           })}
@@ -352,11 +428,11 @@ function ToolCallList({ tools }: { tools: SimEvent[] }) {
 
 // Map event type to badge config
 const EVENT_BADGE: Record<string, { label: string; className: string; Icon?: React.FC<{ className?: string }> }> = {
-  message:      { label: "消息",   className: "bg-ink/6 text-ink/50" },
-  thinking:     { label: "思考",   className: "bg-cobalt/10 text-cobalt/70" },
-  decision:     { label: "决策",   className: "bg-cobalt/15 text-cobalt", Icon: Briefcase },
-  tool_call:    { label: "工具",   className: "bg-ink/6 text-ink/45" },
-  tool_result:  { label: "结果",   className: "bg-mint/12 text-green-700" },
+  message:      { label: "消息",   className: "bg-sky-50 text-sky-700 border border-sky-100", Icon: MessageSquare },
+  thinking:     { label: "思考",   className: "bg-violet-50 text-violet-700 border border-violet-100", Icon: BrainCircuit },
+  decision:     { label: "决策",   className: "bg-cobalt/15 text-cobalt border border-cobalt/15", Icon: Briefcase },
+  tool_call:    { label: "工具",   className: "bg-amber-50 text-amber-800 border border-amber-100", Icon: Wrench },
+  tool_result:  { label: "结果",   className: "bg-emerald-50 text-emerald-700 border border-emerald-100", Icon: CheckCircle2 },
   org_change:   { label: "组织变动", className: "bg-amber-100 text-amber-700", Icon: UserPlus },
   settlement:   { label: "结算",   className: "bg-mint/15 text-green-700", Icon: DollarSign },
   board:        { label: "董事会", className: "bg-signal/20 text-amber-700", Icon: Star },
@@ -419,7 +495,34 @@ function SysBubble({ event, delay }: { event: SimEvent; delay: number }) {
     </div>
   );
 
-  // rule_trigger, error, other system events
+  // Error events — prominent collapsible card
+  if (type === "error") {
+    const errDetail = (event.metadata ?? {}).error as string | undefined;
+    return (
+      <div className="animate-event-in rounded border-2 border-red-300 bg-red-50" style={{ animationDelay: `${delay}ms` }}>
+        <div className="flex items-center gap-2 px-4 py-3">
+          <AlertCircle className="h-4 w-4 shrink-0 text-red-500" />
+          <div className="flex-1 min-w-0">
+            <span className="text-sm font-bold text-red-700">执行错误</span>
+            {event.content && <p className="mt-0.5 text-xs text-red-600 leading-5">{event.content}</p>}
+          </div>
+          <span className="shrink-0 text-[10px] text-red-400">#{event.seq}</span>
+        </div>
+        {errDetail && errDetail.length > 0 && (
+          <details className="border-t border-red-200">
+            <summary className="cursor-pointer px-4 py-2 text-[11px] font-bold text-red-500 hover:bg-red-100 transition-colors">
+              查看错误详情
+            </summary>
+            <pre className="px-4 pb-3 pt-2 text-[11px] leading-5 text-red-700 whitespace-pre-wrap overflow-auto max-h-48">
+              {errDetail}
+            </pre>
+          </details>
+        )}
+      </div>
+    );
+  }
+
+  // rule_trigger + other system events
   const m = agentMeta(event.agentId);
   return (
     <div className="animate-event-in flex items-center gap-2 rounded border border-rule bg-[#fafaf8] px-3 py-2 text-xs" style={{ animationDelay: `${delay}ms` }}>
@@ -434,7 +537,7 @@ function SysBubble({ event, delay }: { event: SimEvent; delay: number }) {
 // Render @mentions as highlighted chips inside markdown text
 function MdWithMentions({ text }: { text: string }) {
   // Pre-process: replace @handle with a placeholder span we'll detect
-  const MENTION_RE = /@([^\s@，。！？,.\!\?]{1,12})/g;
+  const MENTION_RE = /@([A-Za-z0-9_\-\u4e00-\u9fff]{1,16})/g;
   // Just use ReactMarkdown and post-process mentions in text nodes
   const processed = text.replace(MENTION_RE, (_, handle) => `**@${handle}**`);
   return <MdText text={processed} />;
@@ -446,10 +549,13 @@ function ChatBubble({ event, tools, delay, isLatest }: { event: SimEvent; tools:
   const isDecision = type === "decision";
   const isTool     = TOOL_TYPES.has(type);
   const isMsg      = type === "message" || type === "thinking";
+  const isStreaming = event.metadata?.source === "agent-stream";
+  const isActivelyStreaming = isStreaming && event.metadata?.status !== "done";
 
   // Compact tool view for standalone tool events
   if (isTool && !tools.length) {
     const ts = (event.metadata ?? {}).toolSummary as { tool?: string; input?: string; result?: string } | null;
+    const isEvoMap = isEvoMapTool(ts?.tool);
     return (
       <div className="animate-event-in flex gap-2.5" style={{ animationDelay: `${delay}ms` }}>
         <AgentAvatar agentId={event.agentId} size="sm" />
@@ -458,9 +564,25 @@ function ChatBubble({ event, tools, delay, isLatest }: { event: SimEvent; tools:
             <span style={{ color: m.bg }} className="text-xs font-bold">{event.agentName}</span>
             <EventTypeBadge type={type} />
           </div>
-          <div className="rounded border border-rule/60 bg-[#f8f8f4] px-3 py-2">
-            <code className="text-[11px] font-bold text-ink/60">{ts?.tool ?? type}()</code>
-            {ts?.result && <p className="text-[11px] text-ink/50 mt-0.5 leading-5">{ts.result}</p>}
+          <div className={cn(
+            "rounded border px-3 py-2",
+            isEvoMap ? "border-[#67e8f9] bg-[#ecfeff]" : "border-amber-200 bg-[#fffaf0]",
+          )}>
+            <div className="flex items-center gap-2">
+              {isEvoMap && <span className="rounded bg-[#0891b2] px-1.5 py-0.5 text-[10px] font-black text-white">EvoMap</span>}
+              <code className={cn("text-[11px] font-bold", isEvoMap ? "text-[#155e75]" : "text-amber-900")}>{ts?.tool ?? type}()</code>
+            </div>
+            {ts?.input && <p className="mt-1 truncate text-[11px] leading-5 text-ink/50">input: {ts.input}</p>}
+            {ts?.result && <p className="mt-0.5 text-[11px] leading-5 text-ink/65 line-clamp-2">result: {ts.result}</p>}
+            <details className="mt-2">
+              <summary className={cn("cursor-pointer text-[11px] font-bold", isEvoMap ? "text-[#155e75]" : "text-amber-800")}>查看 JSON</summary>
+              <pre className={cn(
+                "mt-2 h-[300px] overflow-auto rounded border bg-white p-3 text-[11px] leading-5 text-ink/70",
+                isEvoMap ? "border-[#67e8f9]" : "border-amber-100",
+              )}>
+                {toolJson(event)}
+              </pre>
+            </details>
           </div>
         </div>
       </div>
@@ -471,13 +593,16 @@ function ChatBubble({ event, tools, delay, isLatest }: { event: SimEvent; tools:
     <div className="animate-event-in flex gap-3" style={{ animationDelay: `${delay}ms` }}>
       <AgentAvatar agentId={event.agentId} />
       <div className="min-w-0 flex-1">
-        {/* Header: name + type badge + seq */}
+        {/* Header: name + role label + type badge + seq */}
         <div className="mb-1.5 flex flex-wrap items-center gap-1.5">
           <a href={`/dashboard/employees/${event.agentId}`} className="text-sm font-bold hover:underline" style={{ color: m.bg }}>
             {event.agentName}
           </a>
+          <span className="rounded px-1.5 py-0.5 text-[10px] font-bold" style={{ backgroundColor: `${m.bg}18`, color: m.bg }}>
+            {m.label}
+          </span>
           <EventTypeBadge type={type} />
-          {isLatest && (
+          {isLatest && isActivelyStreaming && (
             <span className="flex items-center gap-1 rounded-full bg-mint/15 px-2 py-0.5 text-[10px] font-bold text-mint">
               <span className="h-1.5 w-1.5 rounded-full bg-mint animate-pulse" />
               生成中
@@ -488,10 +613,24 @@ function ChatBubble({ event, tools, delay, isLatest }: { event: SimEvent; tools:
         {/* Content bubble */}
         <div className={cn("rounded-sm border p-3",
           isDecision ? "border-cobalt/20 bg-[#f4f6ff]" :
-          isLatest   ? "border-ink/15 bg-white shadow-sm" :
-          "border-rule bg-white"
+          isStreaming ? "animate-generating-card border-cobalt/30 bg-white shadow-[0_0_0_1px_rgba(37,78,219,0.08),0_12px_28px_rgba(37,78,219,0.08)]" :
+          type === "thinking" ? "border-violet-100 bg-violet-50/45" :
+          isLatest   ? "border-sky-100 bg-white shadow-sm" :
+          "border-sky-100 bg-white"
         )}>
-          {isMsg && event.content ? (
+          {isStreaming ? (
+            event.content
+              ? <div className="relative pr-2">
+                  <MdText text={event.content} />
+                  {isActivelyStreaming && <span className="inline-block h-[0.9em] w-[2px] animate-pulse rounded-[1px] bg-ink/70 align-baseline" />}
+                </div>
+              : <p className="flex items-center gap-1.5 text-sm leading-7 text-ink/40">
+                  <span className="typing-dot h-2 w-2 rounded-full bg-ink/35" />
+                  <span className="typing-dot h-2 w-2 rounded-full bg-ink/35" />
+                  <span className="typing-dot h-2 w-2 rounded-full bg-ink/35" />
+                  <span className="ml-2">正在生成…</span>
+                </p>
+          ) : isMsg && event.content ? (
             isLatest
               ? <p className="whitespace-pre-wrap text-sm leading-7 text-ink/80"><TypewriterText text={event.content} active /></p>
               : <MdWithMentions text={event.content} />
@@ -529,7 +668,7 @@ function MemoryBatch({ item, delay }: { item: Extract<EventItem, { kind: "memory
   );
 }
 
-function TypingIndicator({ agentId }: { agentId?: string }) {
+function TypingIndicator({ agentId, agentName }: { agentId?: string; agentName?: string }) {
   const m = agentId ? agentMeta(agentId) : null;
   return (
     <div className="flex gap-3 animate-event-in">
@@ -541,7 +680,12 @@ function TypingIndicator({ agentId }: { agentId?: string }) {
         </div>
       )}
       <div className="flex flex-col gap-1 min-w-0">
-        {m && <span className="text-xs font-bold" style={{ color: m.bg }}>{m.label}</span>}
+        {m && (
+          <div className="flex items-center gap-1.5">
+            <span className="text-xs font-bold" style={{ color: m.bg }}>{agentName ?? m.label}</span>
+            <span className="rounded px-1.5 py-0.5 text-[10px] font-bold" style={{ backgroundColor: `${m.bg}18`, color: m.bg }}>{m.label}</span>
+          </div>
+        )}
         <div className="flex items-center gap-1.5 rounded-sm border border-rule bg-white px-4 py-3 w-fit">
           <span className="typing-dot h-2 w-2 rounded-full bg-ink/40" />
           <span className="typing-dot h-2 w-2 rounded-full bg-ink/40" />
@@ -555,26 +699,30 @@ function TypingIndicator({ agentId }: { agentId?: string }) {
 
 // ─── Chat tab (with play mode) ────────────────────────────────────────────────
 
-function ChatTab({ events, isRunning, playVisible, isPlayMode, latestEventId }: {
+function ChatTab({ events, streamEvents, isRunning, playVisible, isPlayMode, latestEventId, simError }: {
   events: SimEvent[];
+  streamEvents: SimEvent[];
   isRunning: boolean;
   playVisible: number;
   isPlayMode: boolean;
   latestEventId?: string;
+  simError?: string | null;
 }) {
-  const allGroups     = useMemo(() => groupEvents(events), [events]);
+  const displayEvents = useMemo(() => mergeEvents(events, streamEvents), [events, streamEvents]);
+  const allGroups     = useMemo(() => groupEvents(displayEvents), [displayEvents]);
   const visibleGroups = isPlayMode && playVisible >= 0
     ? allGroups.slice(0, playVisible)
     : allGroups;
   const bottomRef = useRef<HTMLDivElement>(null);
 
   // Last event agent for typing indicator
-  const lastEvent = events[events.length - 1];
-  const typingAgentId = isRunning && lastEvent ? lastEvent.agentId : undefined;
+  const lastEvent = displayEvents[displayEvents.length - 1];
+  const typingAgentId   = isRunning && lastEvent ? lastEvent.agentId   : undefined;
+  const typingAgentName = isRunning && lastEvent ? lastEvent.agentName : undefined;
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [visibleGroups.length, isRunning]);
+  }, [visibleGroups.length, isRunning, displayEvents.length]);
 
   if (!allGroups.length && !isRunning) {
     return (
@@ -594,60 +742,17 @@ function ChatTab({ events, isRunning, playVisible, isPlayMode, latestEventId }: 
         const isLatest = !isPlayMode && item.event.id === latestEventId;
         return <ChatBubble key={item.event.id} event={item.event} tools={item.tools} delay={delay} isLatest={isLatest} />;
       })}
-      {isRunning && !isPlayMode && <TypingIndicator agentId={typingAgentId} />}
+      {isRunning && !isPlayMode && streamEvents.length === 0 && <TypingIndicator agentId={typingAgentId} agentName={typingAgentName} />}
+      {simError && (
+        <div className="rounded-lg border-2 border-red-300 bg-red-50 p-4 flex items-start gap-3">
+          <AlertCircle className="h-5 w-5 shrink-0 text-red-500 mt-0.5" />
+          <div>
+            <p className="text-sm font-bold text-red-700">工作流已停止</p>
+            <p className="mt-1 text-xs text-red-600 leading-5">{simError}</p>
+          </div>
+        </div>
+      )}
       <div ref={bottomRef} />
-    </div>
-  );
-}
-
-// ─── Data tab ─────────────────────────────────────────────────────────────────
-
-function DataTab({ day }: { day: DaySummary | null }) {
-  if (!day) return <div className="p-8 text-center text-sm text-ink/40">暂无数据</div>;
-  return (
-    <div className="p-5 space-y-4">
-      <div className="grid grid-cols-2 gap-3">
-        {[
-          { label: "Capital", value: `¥${Math.round(day.capital).toLocaleString()}`, color: "#254edb" },
-          { label: "DAU", value: day.dau.toLocaleString(), color: "#2e9e6b" },
-          { label: "声誉", value: `${day.reputation.toFixed(1)} / 100`, color: "#c05621" },
-          { label: "订阅数", value: day.subscribers.toLocaleString(), color: "#6b7280" },
-        ].map(({ label, value, color }) => (
-          <div key={label} className="rounded-lg border border-rule bg-white p-4">
-            <p className="text-xs text-ink/40 mb-1">{label}</p>
-            <p className="text-xl font-black" style={{ color }}>{value}</p>
-          </div>
-        ))}
-      </div>
-      <div className="rounded-lg border border-rule bg-white p-4">
-        <p className="text-xs font-bold uppercase tracking-widest text-ink/40 mb-3">当日收支</p>
-        <div className="space-y-2 text-sm">
-          <div className="flex justify-between">
-            <span className="text-ink/60">广告收入</span>
-            <span className="font-bold text-mint">+¥{(day.adRevenue ?? 0).toFixed(2)}</span>
-          </div>
-          <div className="flex justify-between">
-            <span className="text-ink/60">LLM 成本</span>
-            <span className="font-bold text-coral">-¥{(day.llmCost ?? 0).toFixed(4)}</span>
-          </div>
-          <div className="flex justify-between border-t border-rule pt-2">
-            <span className="font-bold">净收益</span>
-            <span className="font-bold">¥{((day.adRevenue ?? 0) - (day.llmCost ?? 0)).toFixed(2)}</span>
-          </div>
-        </div>
-      </div>
-      {(day.isBoardDay || (day.articleCount ?? 0) > 0) && (
-        <div className="flex flex-wrap gap-2">
-          {day.isBoardDay && <span className="rounded bg-signal/25 px-2.5 py-1 text-xs font-bold text-amber-700">⬡ 董事会日</span>}
-          {(day.articleCount ?? 0) > 0 && <span className="rounded bg-mint/15 px-2.5 py-1 text-xs font-bold text-green-700">✓ 已发布 {day.articleCount} 篇</span>}
-        </div>
-      )}
-      {day.editorNote && (
-        <div className="rounded-lg border border-rule bg-white p-4">
-          <p className="text-xs font-bold uppercase tracking-widest text-ink/40 mb-2">编辑按语</p>
-          <p className="text-sm leading-7 text-ink/75 italic">{day.editorNote}</p>
-        </div>
-      )}
     </div>
   );
 }
@@ -854,7 +959,7 @@ function BoardMeetingCard({ meeting, onDecide }: { meeting: BoardMeetingInfo; on
 
 // ─── Status type ──────────────────────────────────────────────────────────────
 
-type StatusPayload = { day: number; status: "idle" | "running" | "paused" };
+type StatusPayload = SimStatusSnapshot;
 
 // ─── Main Dashboard component ─────────────────────────────────────────────────
 
@@ -866,10 +971,13 @@ export function Dashboard({ initialDays, initialSelectedDay, onNewDay }: {
   const [days, setDays]               = useState(initialDays);
   const [selectedDay, setSelectedDay] = useState(initialSelectedDay ?? initialDays[0]?.day ?? 1);
   const [events, setEvents]           = useState<SimEvent[]>([]);
+  const [streamEvents, setStreamEvents] = useState<SimEvent[]>([]);
   const [simStatus, setSimStatus]     = useState<string>("idle");
-  const [activeTab, setActiveTab]     = useState<"chat" | "data" | "articles">("chat");
+  const [activeTab, setActiveTab]     = useState<"chat" | "articles" | "topo">("chat");
+  const [activeAgentIds, setActiveAgentIds] = useState<string[]>([]);
   const [boardMeeting, setBoardMeeting] = useState<BoardMeetingInfo | null>(null);
   const [latestEventId, setLatestEventId] = useState<string | undefined>(undefined);
+  const [simError, setSimError]       = useState<string | null>(null);
 
   // Use ref to always have current selectedDay inside SSE closure
   const selectedDayRef = useRef(selectedDay);
@@ -880,6 +988,25 @@ export function Dashboard({ initialDays, initialSelectedDay, onNewDay }: {
   const [playIndex, setPlayIndex]   = useState(0);
   const [isPlaying, setIsPlaying]   = useState(false);
   const allGroups = useMemo(() => groupEvents(events), [events]);
+
+  // Events visible in topology for current play position
+  const topoPlayEvents = useMemo((): SimEvent[] => {
+    if (!isPlayMode) return events;
+    const result: SimEvent[] = [];
+    const seen = new Set<string>();
+    for (let i = 0; i < Math.min(playIndex, allGroups.length); i++) {
+      const item = allGroups[i]!;
+      if (item.kind === "sys") {
+        if (!seen.has(item.event.id)) { result.push(item.event); seen.add(item.event.id); }
+      } else if (item.kind === "memory-batch") {
+        for (const ev of item.events) { if (!seen.has(ev.id)) { result.push(ev); seen.add(ev.id); } }
+      } else {
+        for (const t of item.tools) { if (!seen.has(t.id)) { result.push(t); seen.add(t.id); } }
+        if (!seen.has(item.event.id)) { result.push(item.event); seen.add(item.event.id); }
+      }
+    }
+    return result;
+  }, [isPlayMode, allGroups, playIndex, events]);
 
   // Auto-advance play index
   useEffect(() => {
@@ -901,7 +1028,8 @@ export function Dashboard({ initialDays, initialSelectedDay, onNewDay }: {
     const st = await sr.json() as StatusPayload;
     setSimStatus(st.status);
     setDays(((await dr.json()) as { days: DaySummary[] }).days);
-    setEvents(((await er.json()) as { events: SimEvent[] }).events);
+    const fetchedEvents = ((await er.json()) as { events: SimEvent[] }).events;
+    setEvents(cur => mergeEvents(fetchedEvents, cur.filter(event => event.day === day)));
     const bm = ((await br.json()) as { meeting: BoardMeetingInfo | null }).meeting;
     setBoardMeeting(bm);
   }, []);
@@ -911,6 +1039,7 @@ export function Dashboard({ initialDays, initialSelectedDay, onNewDay }: {
     if (initialSelectedDay != null && initialSelectedDay !== selectedDayRef.current) {
       setSelectedDay(initialSelectedDay);
       setEvents([]);
+      setStreamEvents([]);
       setLatestEventId(undefined);
       setIsPlayMode(false);
       setIsPlaying(false);
@@ -920,9 +1049,32 @@ export function Dashboard({ initialDays, initialSelectedDay, onNewDay }: {
 
   useEffect(() => {
     void refreshAll(selectedDay);
-    const src = new EventSource("/api/sim/stream");
-    src.addEventListener("event", (msg) => {
-      const ev = JSON.parse((msg as MessageEvent).data) as SimEvent;
+  }, [refreshAll, selectedDay]);
+
+  useSimStream({
+    onStatus: (status) => {
+      setSimStatus(status.status);
+      if (status.status === "error") {
+        // Clear all stuck "正在生成..." stream bubbles
+        setStreamEvents([]);
+        setSimError("模拟执行出错，工作流已停止。请查看上方错误详情，或前往系统页面回退到上一天后重新运行。");
+      }
+      if (status.status === "running" || status.status === "idle") {
+        setSimError(null);
+      }
+      if (status.status === "running" && status.day > selectedDayRef.current) {
+        setSelectedDay(status.day);
+        selectedDayRef.current = status.day;
+        setEvents([]);
+        setStreamEvents([]);
+        setLatestEventId(undefined);
+        setActiveTab("chat");
+        setIsPlayMode(false);
+        setIsPlaying(false);
+        onNewDay?.(status.day);
+      }
+    },
+    onEvent: (ev) => {
       const curDay = selectedDayRef.current;
       const evType = ev.eventType as string;
 
@@ -938,9 +1090,17 @@ export function Dashboard({ initialDays, initialSelectedDay, onNewDay }: {
         setIsPlaying(false);
         onNewDay?.(ev.day);
       } else if (ev.day === curDay) {
-        setEvents(cur => [...cur, ev]);
+        setEvents(cur => mergeEvents(cur, [ev]));
       }
       setLatestEventId(ev.id);
+      if (shouldReplaceStreamWithEvent(ev)) {
+        const evTurn = Number((ev.metadata ?? {}).turn ?? -1);
+        setStreamEvents(cur => cur.filter(event => {
+          if (event.day !== ev.day || event.agentId !== ev.agentId) return true;
+          const streamTurn = Number((event.metadata ?? {}).turn ?? -1);
+          return evTurn >= 0 && streamTurn >= 0 && streamTurn !== evTurn;
+        }));
+      }
 
       // Selective refresh: only reload heavy data on milestone events
       if (evType === "settlement") {
@@ -957,14 +1117,46 @@ export function Dashboard({ initialDays, initialSelectedDay, onNewDay }: {
           .then(r => r.json())
           .then((d: { days: DaySummary[] }) => setDays(d.days));
       }
-    });
-    return () => src.close();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    },
+    onAgentStream: (update) => {
+      const curDay = selectedDayRef.current;
+      if (update.day > curDay) {
+        setSelectedDay(update.day);
+        selectedDayRef.current = update.day;
+        setEvents([]);
+        setStreamEvents([]);
+        setActiveAgentIds([]);
+        setActiveTab("chat");
+        setIsPlayMode(false);
+        setIsPlaying(false);
+        onNewDay?.(update.day);
+      }
+
+      if (update.day !== selectedDayRef.current) return;
+
+      // Track which agents are actively streaming
+      if (update.status === "start") {
+        setActiveAgentIds(ids => ids.includes(update.agentId) ? ids : [...ids, update.agentId]);
+      } else if (update.status === "done" || update.status === "error") {
+        setActiveAgentIds(ids => ids.filter(id => id !== update.agentId));
+      }
+
+      if (update.status === "error") {
+        setStreamEvents(cur => cur.filter(event => event.id !== update.streamId));
+        return;
+      }
+      const streamEvent = streamUpdateToEvent(update);
+      setStreamEvents(cur => mergeEvents(cur.filter(event => event.id !== update.streamId), [streamEvent]));
+      setLatestEventId(update.streamId);
+      setSimStatus("running");
+    },
+  });
 
   const selectDay = (day: number) => {
     setSelectedDay(day);
     setEvents([]);
+    setStreamEvents([]);
+    setActiveAgentIds([]);
     setLatestEventId(undefined);
     setActiveTab("chat");
     setIsPlayMode(false);
@@ -1000,8 +1192,8 @@ export function Dashboard({ initialDays, initialSelectedDay, onNewDay }: {
           {/* Tabs */}
           {([
             { id: "chat",     label: "对话",  Icon: Bot },
-            { id: "data",     label: "数据",  Icon: BarChart2 },
             { id: "articles", label: "文章",  Icon: FileText },
+            { id: "topo",     label: "拓扑",  Icon: Network },
           ] as const).map(({ id, label, Icon }) => (
             <button key={id} onClick={() => setActiveTab(id)}
               className={cn("-mb-px flex items-center gap-1.5 border-b-2 px-3 py-2.5 text-sm font-medium transition-colors",
@@ -1013,13 +1205,13 @@ export function Dashboard({ initialDays, initialSelectedDay, onNewDay }: {
 
           {/* Right side: play + status */}
           <div className="ml-auto flex items-center gap-2">
-            {activeTab === "chat" && events.length > 0 && !isPlayMode && (
+            {(activeTab === "chat" || activeTab === "topo") && events.length > 0 && !isPlayMode && (
               <button onClick={startPlay}
                 className="flex items-center gap-1.5 rounded border border-cobalt/30 px-2.5 py-1 text-xs font-medium text-cobalt hover:bg-cobalt/5 transition-colors">
                 <Play className="h-3 w-3" />播放
               </button>
             )}
-            {activeTab === "chat" && isPlayMode && (
+            {(activeTab === "chat" || activeTab === "topo") && isPlayMode && (
               <button onClick={resetPlay}
                 className="flex items-center gap-1.5 rounded border border-rule px-2.5 py-1 text-xs text-ink/50 hover:border-ink/30 transition-colors">
                 <RotateCcw className="h-3 w-3" />退出播放
@@ -1035,7 +1227,7 @@ export function Dashboard({ initialDays, initialSelectedDay, onNewDay }: {
       </div>
 
       {/* Play bar */}
-      {activeTab === "chat" && isPlayMode && (
+      {(activeTab === "chat" || activeTab === "topo") && isPlayMode && (
         <div className="shrink-0 pt-2">
           <PlayBar
             total={allGroups.length}
@@ -1049,18 +1241,29 @@ export function Dashboard({ initialDays, initialSelectedDay, onNewDay }: {
       )}
 
       {/* Content */}
-      <div className="flex-1 overflow-y-auto">
+      <div className={cn("flex-1 min-h-0", activeTab === "topo" ? "overflow-hidden" : "overflow-y-auto")}>
         {activeTab === "chat" && (
           <ChatTab
             events={events}
+            streamEvents={streamEvents}
             isRunning={simStatus === "running"}
             playVisible={isPlayMode ? playIndex : -1}
             isPlayMode={isPlayMode}
             latestEventId={latestEventId}
+            simError={simError}
           />
         )}
-        {activeTab === "data" && <DataTab day={selected ?? null} />}
         {activeTab === "articles" && <ArticlesTab dayNum={selectedDay} />}
+        {activeTab === "topo" && (
+          <div className="h-full">
+            <TopologyTab
+              key={isPlayMode ? `play-${selectedDay}` : `live-${selectedDay}`}
+              events={topoPlayEvents}
+              streamEvents={isPlayMode ? [] : streamEvents}
+              activeAgentIds={isPlayMode ? [] : activeAgentIds}
+            />
+          </div>
+        )}
       </div>
     </div>
   );

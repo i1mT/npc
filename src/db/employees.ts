@@ -1,8 +1,17 @@
 import { randomUUID } from "node:crypto";
 import { addLayerEvent } from "@/db/sim";
 import { getSimDb } from "@/db/connection";
+import { pickEmployeeName } from "@/db/pick-name";
 import type { RoleTemplateName } from "@/mastra/role-templates";
 import { TOOL_GRANTS_BY_ROLE } from "@/mastra/tools/npc-tools";
+
+const DEFAULT_DAILY_SALARY: Record<string, number> = {
+  editor_in_chief: 500,
+  editor: 300,
+  growth: 350,
+  business: 400,
+  column: 380,
+};
 
 export function employeeExistsByRole(roleTemplate: RoleTemplateName) {
   const row = getSimDb()
@@ -19,7 +28,7 @@ export function listActiveEmployeeLabels() {
 
 export function hireEmployee(input: {
   day: number;
-  displayName: string;
+  displayName?: string;
   roleTemplate: RoleTemplateName;
   agentHandle: string;
   systemPrompt: string;
@@ -29,6 +38,7 @@ export function hireEmployee(input: {
 }) {
   const db = getSimDb();
   const id = randomUUID();
+  const displayName = input.displayName ?? pickEmployeeName();
   const grantedTools = JSON.stringify(TOOL_GRANTS_BY_ROLE[input.roleTemplate] ?? []);
   const event = addLayerEvent({
     day: input.day,
@@ -37,13 +47,14 @@ export function hireEmployee(input: {
     layer: "structure",
     eventType: "org_change",
     action: "hire",
-    content: `HR 招募 ${input.displayName}（${input.roleTemplate}）：${input.reason}`,
+    content: `HR 招募 ${displayName}（${input.roleTemplate}）：${input.reason}`,
     payload: input,
   });
+  const salary = DEFAULT_DAILY_SALARY[input.roleTemplate] ?? 300;
   db.prepare(
-    `INSERT INTO employees (id, display_name, role_template, status, joined_day, system_prompt, soul, tools_granted, agent_handle, caused_by_event)
-     VALUES (?, ?, ?, 'active', ?, ?, ?, ?, ?, ?)`,
-  ).run(id, input.displayName, input.roleTemplate, input.day + 1, input.systemPrompt, input.soul ?? "", grantedTools, input.agentHandle, event.id);
+    `INSERT INTO employees (id, display_name, role_template, status, joined_day, system_prompt, soul, tools_granted, agent_handle, caused_by_event, daily_salary)
+     VALUES (?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(id, displayName, input.roleTemplate, input.day + 1, input.systemPrompt, input.soul ?? "", grantedTools, input.agentHandle, event.id, salary);
   const supervisorId = input.supervisorId ?? "editor-in-chief";
   db.prepare(
     `INSERT OR IGNORE INTO org_relations (id, superior_id, subordinate_id, effective_from)
@@ -54,7 +65,7 @@ export function hireEmployee(input: {
 
 export function spawnActiveEmployee(input: {
   day: number;
-  displayName: string;
+  displayName?: string;
   roleTemplate: RoleTemplateName;
   agentHandle: string;
   systemPrompt: string;
@@ -62,6 +73,7 @@ export function spawnActiveEmployee(input: {
   reason: string;
 }) {
   if (employeeExistsByRole(input.roleTemplate)) return null;
+  const displayName = input.displayName ?? pickEmployeeName();
   const grantedTools = JSON.stringify(TOOL_GRANTS_BY_ROLE[input.roleTemplate] ?? []);
   const event = addLayerEvent({
     day: input.day,
@@ -70,14 +82,15 @@ export function spawnActiveEmployee(input: {
     layer: "structure",
     eventType: "org_change",
     action: "spawn_agent",
-    content: `孵化 ${input.roleTemplate} Agent：${input.reason}`,
-    payload: input,
+    content: `孵化 ${displayName}（${input.roleTemplate}）：${input.reason}`,
+    payload: { ...input, displayName },
   });
+  const salary = DEFAULT_DAILY_SALARY[input.roleTemplate] ?? 300;
   getSimDb()
     .prepare(
-      `INSERT INTO employees (id, display_name, role_template, status, joined_day, system_prompt, soul, tools_granted, agent_handle, caused_by_event)
-       VALUES (?, ?, ?, 'active', ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO employees (id, display_name, role_template, status, joined_day, system_prompt, soul, tools_granted, agent_handle, caused_by_event, daily_salary)
+       VALUES (?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?)`,
     )
-    .run(randomUUID(), input.displayName, input.roleTemplate, input.day + 1, input.systemPrompt, input.soul ?? "", grantedTools, input.agentHandle, event.id);
+    .run(randomUUID(), displayName, input.roleTemplate, input.day + 1, input.systemPrompt, input.soul ?? "", grantedTools, input.agentHandle, event.id, salary);
   return event;
 }

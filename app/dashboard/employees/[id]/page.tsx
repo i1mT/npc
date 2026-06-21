@@ -54,27 +54,46 @@ function previewContent(content: string, type: string): string {
 
 export default async function EmployeePage({
   params,
+  searchParams,
 }: {
   params: Promise<{ id: string }>;
+  searchParams?: Promise<{ day?: string }>;
 }) {
   const { id } = await params;
+  const query = searchParams ? await searchParams : {};
   const db = getSimDb();
+  const latestDay = (db.prepare("SELECT COALESCE(MAX(day), 0) AS day FROM sim_days").get() as { day: number }).day;
+  const selectedDay = Number(query.day ?? latestDay);
 
   const employee = db.prepare(
-    "SELECT id, display_name, role_template, status, joined_day, left_day, system_prompt, soul, tools_granted, memory, agent_handle FROM employees WHERE id = ? OR agent_handle = ?"
+    "SELECT id, display_name, role_template, status, joined_day, left_day, system_prompt, soul, tools_granted, memory, agent_handle, daily_salary FROM employees WHERE id = ? OR agent_handle = ?"
   ).get(id, id) as {
     id: string; display_name: string; role_template: RoleTemplateName;
     status: string; joined_day: number; left_day: number | null;
     system_prompt: string | null; soul: string | null;
     tools_granted: string | null; memory: string | null;
-    agent_handle: string;
+    agent_handle: string; daily_salary: number | null;
   } | undefined;
 
   if (!employee) notFound();
 
+  const snapshot = selectedDay > 0
+    ? db.prepare(
+      `SELECT day, soul_md, memory_md
+       FROM employee_soul_snapshots
+       WHERE employee_id = ? AND day <= ?
+       ORDER BY day DESC
+       LIMIT 1`,
+    ).get(employee.id, selectedDay) as { day: number; soul_md: string; memory_md: string } | undefined
+    : undefined;
+
   const recentEvents = db.prepare(
-    "SELECT id, day, seq, event_type, substr(content, 1, 200) AS content FROM work_events WHERE actor_id = ? ORDER BY day DESC, seq DESC LIMIT 30"
-  ).all(employee.agent_handle) as { id: string; day: number; seq: number; event_type: string; content: string }[];
+    `SELECT id, day, seq, event_type, substr(content, 1, 200) AS content
+     FROM work_events
+     WHERE actor_id = ? AND (? <= 0 OR day <= ?)
+     ORDER BY day DESC, seq DESC
+     LIMIT 30`,
+  ).all(employee.agent_handle, selectedDay, selectedDay) as { id: string; day: number; seq: number; event_type: string; content: string }[];
 
   // Parse granted tools from JSON
   let grantedTools: ToolName[] = [];
@@ -83,8 +102,8 @@ export default async function EmployeePage({
   } catch { /* skip */ }
 
   const style = ROLE_STYLE[employee.role_template] ?? { label: employee.role_template, bg: "#6b7280", text: "#fff", initial: "?" };
-  const soul = employee.soul?.trim() || null;
-  const memory = employee.memory?.trim() || null;
+  const soul = snapshot?.soul_md?.trim() || employee.soul?.trim() || null;
+  const memory = snapshot?.memory_md?.trim() || employee.memory?.trim() || null;
   const systemPrompt = employee.system_prompt?.trim() || null;
 
   return (
@@ -120,6 +139,10 @@ export default async function EmployeePage({
                 <span className="flex items-center gap-1"><Calendar className="h-3.5 w-3.5" /> Day {employee.joined_day} 入职</span>
                 {employee.left_day && <span className="flex items-center gap-1"><Clock className="h-3.5 w-3.5" /> Day {employee.left_day} 离职</span>}
                 <span className="flex items-center gap-1"><Bot className="h-3.5 w-3.5" /> {employee.role_template}</span>
+                {employee.daily_salary != null && (
+                  <span className="flex items-center gap-1 font-mono text-cobalt">¥{employee.daily_salary}/天</span>
+                )}
+                {selectedDay > 0 && <span className="flex items-center gap-1"><Clock className="h-3.5 w-3.5" /> 当前查看 Day {selectedDay}</span>}
               </div>
             </div>
           </div>
@@ -141,7 +164,9 @@ export default async function EmployeePage({
         <section>
           <div className="mb-2 flex items-center gap-2 text-xs font-bold uppercase tracking-widest text-ink/40">
             <Sparkles className="h-3.5 w-3.5" /> 灵魂 / Soul
-            <span className="ml-auto text-[10px] normal-case font-normal text-ink/30">由 Agent 自主进化，可通过 update_my_soul 工具更新</span>
+            <span className="ml-auto text-[10px] normal-case font-normal text-ink/30">
+              {snapshot ? `快照 Day ${snapshot.day}` : "暂无历史快照，显示当前值"}
+            </span>
           </div>
           <div className="rounded-lg border border-rule bg-white p-5">
             {soul
@@ -155,7 +180,7 @@ export default async function EmployeePage({
         <section>
           <div className="mb-2 flex items-center gap-2 text-xs font-bold uppercase tracking-widest text-ink/40">
             <Brain className="h-3.5 w-3.5" /> 工作记忆
-            {memory && <span className="ml-auto text-[10px] normal-case font-normal text-ink/30">{memory.length} / 800 字</span>}
+            {memory && <span className="ml-auto text-[10px] normal-case font-normal text-ink/30">{memory.length} / 800 字 · {snapshot ? `快照 Day ${snapshot.day}` : "当前值"}</span>}
           </div>
           <div className="rounded-lg border border-rule bg-white p-5">
             {memory
@@ -199,7 +224,7 @@ export default async function EmployeePage({
         {/* Recent work timeline */}
         <section>
           <div className="mb-2 flex items-center gap-2 text-xs font-bold uppercase tracking-widest text-ink/40">
-            <Clock className="h-3.5 w-3.5" /> 最近工作（最新 30 条）
+            <Clock className="h-3.5 w-3.5" /> 最近工作（截至 Day {selectedDay || latestDay}，最新 30 条）
           </div>
           {recentEvents.length === 0 ? (
             <div className="rounded-lg border border-rule bg-white p-6 text-center text-sm text-ink/40">暂无工作记录</div>

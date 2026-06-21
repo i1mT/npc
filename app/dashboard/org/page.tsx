@@ -3,6 +3,7 @@ import { listDays } from "@/db/sim";
 import { dayToShortDate } from "@/lib/dates";
 import Link from "next/link";
 import { LayoutGrid } from "lucide-react";
+import { AgentWorkLabel, OrgWorkStatusProvider } from "@/components/org-work-status";
 
 export const dynamic = "force-dynamic";
 
@@ -26,6 +27,7 @@ interface Employee {
   joined_day: number;
   left_day: number | null;
   agent_handle: string;
+  daily_salary: number | null;
 }
 
 interface OrgRelation {
@@ -63,6 +65,7 @@ function AgentNode({ employee, size = "md" }: { employee: Employee; size?: "sm" 
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-1.5">
             <span className="font-bold text-sm group-hover:text-cobalt transition-colors">{employee.display_name}</span>
+            <AgentWorkLabel agentHandle={employee.agent_handle} />
             <span className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] font-bold ${employee.status === "active" ? "bg-mint/15 text-green-700" : "bg-rule text-ink/50"}`}>
               {employee.status === "active" ? "在职" : "离职"}
             </span>
@@ -70,6 +73,9 @@ function AgentNode({ employee, size = "md" }: { employee: Employee; size?: "sm" 
           <div className="mt-1 flex flex-wrap gap-2 text-xs text-ink/50">
             <span className="rounded px-1.5 py-0.5 text-[10px] font-bold" style={{ backgroundColor: style.bg + "1a", color: style.bg }}>{style.label}</span>
             <span>Day {employee.joined_day} 入职</span>
+            {employee.daily_salary != null && (
+              <span className="font-mono text-[10px] text-cobalt">¥{employee.daily_salary}/天</span>
+            )}
           </div>
           <p className="mt-1.5 font-mono text-[10px] text-ink/35">@{employee.agent_handle}</p>
         </div>
@@ -136,7 +142,7 @@ export default async function OrgPage({
 
   // Filter employees active on the selected day
   const employees = db.prepare(
-    `SELECT id, display_name, role_template, status, joined_day, left_day, agent_handle
+    `SELECT id, display_name, role_template, status, joined_day, left_day, agent_handle, daily_salary
      FROM employees
      WHERE joined_day <= ?
        AND (left_day IS NULL OR left_day > ?)
@@ -177,7 +183,8 @@ export default async function OrgPage({
   const allChildren = [...directChildren, ...orphans.filter((o) => !directChildren.find((c) => c.id === o.id))];
 
   return (
-    <div className="h-full overflow-y-auto">
+    <OrgWorkStatusProvider>
+      <div className="h-full overflow-y-auto">
       {/* Header */}
       <header className="border-b border-rule bg-white px-6 py-4">
         <div className="flex items-center justify-between gap-3">
@@ -278,6 +285,30 @@ export default async function OrgPage({
           </div>
         </section>
 
+        {/* Talent market reference */}
+        <section>
+          <h2 className="mb-3 text-xs font-bold uppercase tracking-widest text-ink/40">人才市场参考薪资</h2>
+          <div className="rounded-lg border border-rule bg-white divide-y divide-rule/40">
+            {[
+              { role: "editor_in_chief", label: "总编辑", salary: 500 },
+              { role: "editor", label: "编辑", salary: 300 },
+              { role: "growth", label: "增长 Agent", salary: 350 },
+              { role: "business", label: "商业 Agent", salary: 400 },
+              { role: "column", label: "专栏 Agent", salary: 380 },
+            ].map(item => {
+              const style = ROLE_STYLE[item.role] ?? { bg: "#6b7280", label: item.label };
+              return (
+                <div key={item.role} className="flex items-center justify-between px-4 py-3">
+                  <div className="flex items-center gap-2">
+                    <span className="rounded px-2 py-0.5 text-[10px] font-bold" style={{ backgroundColor: style.bg + "1a", color: style.bg }}>{style.label}</span>
+                  </div>
+                  <span className="font-mono text-sm text-cobalt font-bold">¥{item.salary} / 天</span>
+                </div>
+              );
+            })}
+          </div>
+        </section>
+
         {/* Org changes timeline */}
         {orgChanges.length > 0 && (
           <section>
@@ -293,6 +324,7 @@ export default async function OrgPage({
           </section>
         )}
       </div>
-    </div>
+      </div>
+    </OrgWorkStatusProvider>
   );
 }
