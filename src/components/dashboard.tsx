@@ -270,6 +270,7 @@ type EventItem =
 const TOOL_TYPES = new Set(["tool_call", "tool_result"]);
 const SYS_TYPES  = new Set(["board", "settlement", "org_change", "growth_trigger", "rule_trigger"]);
 const MEM_TYPES  = new Set(["memory_write", "memory_read"]);
+type TimelineEvent = SimEvent & { __displayOrder?: number };
 
 function groupEvents(events: SimEvent[]): EventItem[] {
   const result: EventItem[] = [];
@@ -328,7 +329,7 @@ function mergeEvents(...groups: SimEvent[][]) {
   for (const group of groups) {
     for (const event of group) byId.set(event.id, event);
   }
-  return Array.from(byId.values()).sort((a, b) => a.day - b.day || a.seq - b.seq);
+  return Array.from(byId.values()).sort(compareTimelineEvents);
 }
 
 function streamUpdateToEvent(update: AgentStreamUpdate): SimEvent {
@@ -343,6 +344,33 @@ function streamUpdateToEvent(update: AgentStreamUpdate): SimEvent {
     metadata: { source: "agent-stream", status: update.status, turn: update.turn },
     createdAt: new Date().toISOString(),
   };
+}
+
+function compareTimelineEvents(a: SimEvent, b: SimEvent) {
+  return a.day - b.day
+    || timelineOrder(a) - timelineOrder(b)
+    || a.seq - b.seq
+    || a.createdAt.localeCompare(b.createdAt)
+    || a.id.localeCompare(b.id);
+}
+
+function timelineOrder(event: SimEvent) {
+  return readDisplayOrder(event) ?? event.seq;
+}
+
+function readDisplayOrder(event: SimEvent) {
+  const value = (event as TimelineEvent).__displayOrder;
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function withDisplayOrder(event: SimEvent, order: number): SimEvent {
+  return { ...event, __displayOrder: order } as TimelineEvent;
+}
+
+function eventStreamKey(event: Pick<SimEvent, "day" | "agentId" | "metadata">) {
+  const turn = Number((event.metadata ?? {}).turn ?? -1);
+  if (!Number.isFinite(turn) || turn < 0) return null;
+  return `${event.day}:${event.agentId}:${turn}`;
 }
 
 function shouldReplaceStreamWithEvent(ev: SimEvent) {
@@ -985,6 +1013,42 @@ export function Dashboard({ initialDays, initialSelectedDay, onNewDay }: {
   // Use ref to always have current selectedDay inside SSE closure
   const selectedDayRef = useRef(selectedDay);
   selectedDayRef.current = selectedDay;
+  const nextDisplayOrderRef = useRef(1);
+  const displayOrderByEventIdRef = useRef(new Map<string, number>());
+  const displayOrderByStreamKeyRef = useRef(new Map<string, number>());
+
+  const resetTimelineOrder = useCallback(() => {
+    nextDisplayOrderRef.current = 1;
+    displayOrderByEventIdRef.current.clear();
+    displayOrderByStreamKeyRef.current.clear();
+  }, []);
+
+  const rememberTimelineOrder = useCallback((event: SimEvent) => {
+    const streamKey = eventStreamKey(event);
+    let order = readDisplayOrder(event)
+      ?? displayOrderByEventIdRef.current.get(event.id)
+      ?? (streamKey ? displayOrderByStreamKeyRef.current.get(streamKey) : undefined);
+
+    if (order == null) {
+      const isStreamEvent = event.metadata?.source === "agent-stream";
+      const turn = Number((event.metadata ?? {}).turn ?? -1);
+      order = isStreamEvent && nextDisplayOrderRef.current === 1 && Number.isFinite(turn) && turn >= 0
+        ? 100000 + turn
+        : isStreamEvent
+          ? nextDisplayOrderRef.current
+          : event.seq;
+    }
+
+    displayOrderByEventIdRef.current.set(event.id, order);
+    if (streamKey) displayOrderByStreamKeyRef.current.set(streamKey, order);
+    nextDisplayOrderRef.current = Math.max(nextDisplayOrderRef.current, order + 1);
+    return withDisplayOrder(event, order);
+  }, []);
+
+  const rememberTimelineOrders = useCallback(
+    (items: SimEvent[]) => items.map(rememberTimelineOrder),
+    [rememberTimelineOrder],
+  );
 
   // Play mode
   const [isPlayMode, setIsPlayMode] = useState(false);
@@ -1032,15 +1096,17 @@ export function Dashboard({ initialDays, initialSelectedDay, onNewDay }: {
     setSimStatus(st.status);
     setDays(((await dr.json()) as { days: DaySummary[] }).days);
     const fetchedEvents = ((await er.json()) as { events: SimEvent[] }).events;
-    setEvents(cur => mergeEvents(fetchedEvents, cur.filter(event => event.day === day)));
+    const orderedFetchedEvents = rememberTimelineOrders(fetchedEvents);
+    setEvents(cur => mergeEvents(rememberTimelineOrders(cur.filter(event => event.day === day)), orderedFetchedEvents));
     const bm = ((await br.json()) as { meeting: BoardMeetingInfo | null }).meeting;
     setBoardMeeting(bm);
-  }, []);
+  }, [rememberTimelineOrders]);
 
   // Sync selected day when URL param changes (user switched day in DaySwitcher)
   useEffect(() => {
     if (initialSelectedDay != null && initialSelectedDay !== selectedDayRef.current) {
       setSelectedDay(initialSelectedDay);
+      resetTimelineOrder();
       setEvents([]);
       setStreamEvents([]);
       setLatestEventId(undefined);
@@ -1048,7 +1114,7 @@ export function Dashboard({ initialDays, initialSelectedDay, onNewDay }: {
       setIsPlaying(false);
       void refreshAll(initialSelectedDay);
     }
-  }, [initialSelectedDay, refreshAll]);
+  }, [initialSelectedDay, refreshAll, resetTimelineOrder]);
 
   useEffect(() => {
     void refreshAll(selectedDay);
@@ -1068,6 +1134,7 @@ export function Dashboard({ initialDays, initialSelectedDay, onNewDay }: {
       if (status.status === "running" && status.day > selectedDayRef.current) {
         setSelectedDay(status.day);
         selectedDayRef.current = status.day;
+        resetTimelineOrder();
         setEvents([]);
         setStreamEvents([]);
         setLatestEventId(undefined);
@@ -1088,12 +1155,15 @@ export function Dashboard({ initialDays, initialSelectedDay, onNewDay }: {
         // New day detected — navigate and switch view
         setSelectedDay(ev.day);
         selectedDayRef.current = ev.day;
-        setEvents([ev]);
+        resetTimelineOrder();
+        const orderedEvent = rememberTimelineOrder(ev);
+        setEvents([orderedEvent]);
         setIsPlayMode(false);
         setIsPlaying(false);
         onNewDay?.(ev.day);
       } else if (ev.day === curDay) {
-        setEvents(cur => mergeEvents(cur, [ev]));
+        const orderedEvent = rememberTimelineOrder(ev);
+        setEvents(cur => mergeEvents(rememberTimelineOrders(cur), [orderedEvent]));
       }
       setLatestEventId(ev.id);
       if (shouldReplaceStreamWithEvent(ev)) {
@@ -1126,6 +1196,7 @@ export function Dashboard({ initialDays, initialSelectedDay, onNewDay }: {
       if (update.day > curDay) {
         setSelectedDay(update.day);
         selectedDayRef.current = update.day;
+        resetTimelineOrder();
         setEvents([]);
         setStreamEvents([]);
         setActiveAgentIds([]);
@@ -1148,8 +1219,8 @@ export function Dashboard({ initialDays, initialSelectedDay, onNewDay }: {
         setStreamEvents(cur => cur.filter(event => event.id !== update.streamId));
         return;
       }
-      const streamEvent = streamUpdateToEvent(update);
-      setStreamEvents(cur => mergeEvents(cur.filter(event => event.id !== update.streamId), [streamEvent]));
+      const streamEvent = rememberTimelineOrder(streamUpdateToEvent(update));
+      setStreamEvents(cur => mergeEvents(rememberTimelineOrders(cur.filter(event => event.id !== update.streamId)), [streamEvent]));
       setLatestEventId(update.streamId);
       setSimStatus("running");
     },
@@ -1157,6 +1228,7 @@ export function Dashboard({ initialDays, initialSelectedDay, onNewDay }: {
 
   const selectDay = (day: number) => {
     setSelectedDay(day);
+    resetTimelineOrder();
     setEvents([]);
     setStreamEvents([]);
     setActiveAgentIds([]);
