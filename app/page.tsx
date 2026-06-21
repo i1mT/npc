@@ -1,9 +1,11 @@
 import Link from "next/link";
 import Image from "next/image";
+import { Suspense } from "react";
 import type { Metadata } from "next";
 import { BrandLogo } from "@/components/brand/brand-logo";
+import { DaySwitcher } from "@/components/portal/day-switcher";
 import { listDays, listPublishedArticles, getDay } from "@/db/sim";
-import { SITE_KICKER, SITE_NAME, SITE_TAGLINE } from "@/lib/brand";
+import { SITE_KICKER, SITE_TAGLINE } from "@/lib/brand";
 import type { PublishedArticle } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
@@ -139,7 +141,14 @@ export default async function Page({
         <div className="mx-auto max-w-[1200px] px-6">
 
           {/* Masthead */}
-          <div className="text-center py-6">
+          <div className="relative text-center py-6">
+            {/* Day switcher — top-right of masthead */}
+            <div className="absolute top-4 right-0">
+              <Suspense>
+                <DaySwitcher days={days} selectedDay={selectedDay} />
+              </Suspense>
+            </div>
+
             <BrandLogo
               href="/"
               priority

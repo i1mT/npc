@@ -2,8 +2,12 @@ export type RoleTemplateName = "editor_in_chief" | "editor" | "growth" | "busine
 
 export const evomapExperienceInstruction = [
   "## EvoMap 经验复用",
-  "- 遇到复杂选题、增长、商业、组织或流程决策时，可以先从 EvoMap 检索和读取可复用经验，再结合 AGI Daily 当前上下文适配执行。",
-  "- 形成可复用的方法、复盘或流程经验后，在存在可用 EvoMap 发布工具或发布流程时，可以整理为经验并通过 EvoMap 发布。",
+  "遇到复杂决策（选题、增长、商业、组织、流程）时，先查 EvoMap 经验再行动：",
+  "  1. 用 evomap_search_recipes 按关键词搜索工作流级经验（recipe 是多步流程）",
+  "  2. 同时用 evomap_list_genes 浏览单项能力 gene（gene 不支持关键词检索，直接读排行或按 type 筛选）",
+  "  3. 若 search_recipes 返回 0 个结果，不要止步——list_genes 通常有相关能力可参考",
+  "  4. 拿到感兴趣的 id 后，用 evomap_get_recipe_detail 或 evomap_get_gene_detail 读完整内容",
+  "形成可复用的方法后，可通过 EvoMap 发布（如有工具可用）。",
 ].join("\n");
 
 export const roleTemplates: Record<RoleTemplateName, { defaultTools: string[]; prompt: string }> = {

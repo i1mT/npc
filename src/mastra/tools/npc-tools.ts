@@ -11,7 +11,7 @@
 import { createTool } from "@mastra/core/tools";
 import { z } from "zod";
 import { randomUUID } from "node:crypto";
-import { getArticleSourcesByIds, queryArticles } from "@/db/articles";
+import { getArticleSourcesByIds, queryArticles, resolveArticleIdsByUrls } from "@/db/articles";
 import {
   getLatestDay,
   publishArticles as dbPublishArticles,
@@ -102,25 +102,32 @@ const articleSchema = z.object({
 function makePublishArticles(ctx: AgentToolCtx) {
   return createTool({
     id: "publish_articles",
-    description: "发布审核通过的文章到今日日报。总编批准后由编辑调用，提交 5-10 篇。sourceId 必须是 fetch_articles 返回的 id 原值（64位十六进制），不能是 URL。",
+    description: "发布审核通过的文章到今日日报。总编批准后由编辑调用，提交 5-10 篇。sourceId 优先使用 fetch_articles 返回的 id（64位十六进制）；也可传文章原始 URL，系统会自动反查对应 id。",
     inputSchema: z.object({
       articles: z.array(articleSchema).min(5).max(12),
     }),
     execute: async (args: { articles: Array<z.infer<typeof articleSchema>> }) => {
       const HEX_RE = /^[0-9a-f]{16,}$/i;
-      const valid = args.articles.filter(
-        a => HEX_RE.test(a.sourceId) && !a.sourceId.startsWith("http"),
-      );
+      // Separate articles into hex-ID format and URL format
+      const hexArticles = args.articles.filter(a => HEX_RE.test(a.sourceId));
+      const urlArticles = args.articles.filter(a => !HEX_RE.test(a.sourceId) && a.sourceId.startsWith("http"));
+
+      // Resolve URL-format sourceIds to hex IDs via DB lookup
+      let urlToHex = new Map<string, string>();
+      if (urlArticles.length > 0) {
+        urlToHex = await resolveArticleIdsByUrls(urlArticles.map(a => a.sourceId));
+      }
+      const resolvedFromUrl = urlArticles
+        .filter(a => urlToHex.has(a.sourceId))
+        .map(a => ({ ...a, sourceId: urlToHex.get(a.sourceId)! }));
+
+      const valid = [...hexArticles, ...resolvedFromUrl];
       if (valid.length < 5) {
-        const badSamples = args.articles
-          .filter(a => !HEX_RE.test(a.sourceId) || a.sourceId.startsWith("http"))
-          .slice(0, 3)
-          .map(a => `"${a.sourceId.slice(0, 40)}"`)
-          .join(", ");
+        const unresolvedUrls = urlArticles.filter(a => !urlToHex.has(a.sourceId)).length;
         throw new Error(
-          `发布失败：有效 sourceId 仅 ${valid.length} 个，需要至少 5 个。` +
-          `格式错误示例：${badSamples}。` +
-          `sourceId 必须是 fetch_articles 返回的 id 字段原值（64位十六进制），请勿使用 URL 或自造值。`
+          `发布失败：有效文章仅 ${valid.length} 篇（需至少 5 篇）。` +
+          (unresolvedUrls > 0 ? `${unresolvedUrls} 个 URL 在数据库中未找到匹配记录。` : "") +
+          `请确认 sourceId 来自 fetch_articles 返回的 id 字段（十六进制）或文章原始 URL。`
         );
       }
       const sourceById = await getArticleSourcesByIds(valid.map(a => a.sourceId));
