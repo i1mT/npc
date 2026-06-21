@@ -7,7 +7,7 @@
  *   - Safety limits (max turns, timeout)
  */
 import { randomUUID } from "node:crypto";
-import { ensureBaselineData, getLatestDay, projectDay, recordDailySettlement, upsertDay, addLayerEvent } from "@/db/sim";
+import { ensureBaselineData, getLatestDay, projectDay, recordDailySettlement, upsertDay, addLayerEvent, upsertAgentStream } from "@/db/sim";
 import { getTopicPerformanceLast7Days } from "@/db/memory-queries";
 import { employeeExistsByRole, listActiveEmployeeLabels, spawnActiveEmployee } from "@/db/employees";
 import { dbAll, dbFirst, upsertSoulSnapshot } from "@/db/connection";
@@ -134,10 +134,13 @@ async function streamAgentTurn(input: {
     status: "start",
     turn: input.turn,
   });
+  upsertAgentStream({ streamId, day: input.day, agentId: input.agentHandle, agentName: input.agentName, eventType: "message", content: "", status: "start", turn: input.turn }).catch(e => console.warn("[d1-stream] start", e));
 
   try {
     const output = await agent.stream(input.prompt, input.options);
     let text = "";
+    let lastD1WriteAt = 0;
+    const D1_THROTTLE_MS = 1000;
     if (output.fullStream) {
       for await (const chunk of readUnknownStream(output.fullStream)) {
         logLlmStreamChunk(input, chunk);
@@ -155,6 +158,10 @@ async function streamAgentTurn(input: {
           status: "delta",
           turn: input.turn,
         });
+        if (Date.now() - lastD1WriteAt >= D1_THROTTLE_MS) {
+          lastD1WriteAt = Date.now();
+          upsertAgentStream({ streamId, day: input.day, agentId: input.agentHandle, agentName: input.agentName, eventType: "message", content: text, status: "delta", turn: input.turn }).catch(e => console.warn("[d1-stream] delta", e));
+        }
       }
     } else if (output.textStream) {
       for await (const delta of readTextStream(output.textStream)) {
@@ -172,6 +179,10 @@ async function streamAgentTurn(input: {
           status: "delta",
           turn: input.turn,
         });
+        if (Date.now() - lastD1WriteAt >= D1_THROTTLE_MS) {
+          lastD1WriteAt = Date.now();
+          upsertAgentStream({ streamId, day: input.day, agentId: input.agentHandle, agentName: input.agentName, eventType: "message", content: text, status: "delta", turn: input.turn }).catch(e => console.warn("[d1-stream] delta", e));
+        }
       }
     }
     if (!text && output.text) text = typeof output.text === "string" ? output.text : await output.text;
@@ -187,6 +198,7 @@ async function streamAgentTurn(input: {
       status: "done",
       turn: input.turn,
     });
+    await upsertAgentStream({ streamId, day: input.day, agentId: input.agentHandle, agentName: input.agentName, eventType: "message", content: text, status: "done", turn: input.turn }).catch(e => console.warn("[d1-stream] done", e));
     return { text: text.trim(), output: { ...output, text, usage } };
   } catch (error) {
     emitAgentStream({
@@ -200,6 +212,7 @@ async function streamAgentTurn(input: {
       status: "error",
       turn: input.turn,
     });
+    await upsertAgentStream({ streamId, day: input.day, agentId: input.agentHandle, agentName: input.agentName, eventType: "message", content: "", status: "error", turn: input.turn }).catch(e => console.warn("[d1-stream] error", e));
     throw error;
   }
 }
@@ -487,6 +500,7 @@ export async function runAgenticDay(day: number): Promise<DayState> {
         status: "start",
         turn: turnNumber,
       });
+      upsertAgentStream({ streamId: fallbackStreamId, day, agentId: activeHandle, agentName, eventType: "message", content: "", status: "start", turn: turnNumber }).catch(e => console.warn("[d1-stream] fallback start", e));
       try {
         response = await agent.generate(turnPrompt, {
           toolsets,
@@ -506,6 +520,7 @@ export async function runAgenticDay(day: number): Promise<DayState> {
           status: "done",
           turn: turnNumber,
         });
+        await upsertAgentStream({ streamId: fallbackStreamId, day, agentId: activeHandle, agentName, eventType: "message", content: text, status: "done", turn: turnNumber }).catch(e => console.warn("[d1-stream] fallback done", e));
       } catch (err) {
         emitAgentStream({
           streamId: fallbackStreamId,
@@ -518,6 +533,7 @@ export async function runAgenticDay(day: number): Promise<DayState> {
           status: "error",
           turn: turnNumber,
         });
+        await upsertAgentStream({ streamId: fallbackStreamId, day, agentId: activeHandle, agentName, eventType: "message", content: "", status: "error", turn: turnNumber }).catch(e => console.warn("[d1-stream] fallback error", e));
         const errMsg = err instanceof Error ? err.message : String(err);
         console.error(`[agentic-day] agent ${activeHandle} turn ${turnNumber} error:`, errMsg);
         await logEvent({

@@ -75,6 +75,7 @@ export async function getSoulSnapshots(employeeId: string) {
 
 export async function rollbackToDay(targetDay: number) {
   const tables = [
+    "agent_streams",
     "work_events",
     "published_articles",
     "daily_settlement",
@@ -142,6 +143,7 @@ export async function resetSimDb() {
     DELETE FROM layer_snapshots;
     DELETE FROM work_events;
     DELETE FROM published_articles;
+    DELETE FROM agent_streams;
     DELETE FROM article_reviews;
     DELETE FROM human_comments;
     DELETE FROM sim_days;

@@ -11,7 +11,7 @@ import {
 } from "lucide-react";
 import type { DaySummary, SimEvent } from "@/lib/types";
 import { cn } from "@/lib/utils";
-import { useSimStream, type AgentStreamUpdate, type SimStatusSnapshot } from "@/components/live-sim";
+import { useSimPoll, type AgentStreamUpdate, type SimStatusSnapshot } from "@/components/live-sim";
 import { TopologyTab } from "@/components/topology-tab";
 
 // ─── Typewriter hook ──────────────────────────────────────────────────────────
@@ -1120,7 +1120,7 @@ export function Dashboard({ initialDays, initialSelectedDay, onNewDay }: {
     void refreshAll(selectedDay);
   }, [refreshAll, selectedDay]);
 
-  useSimStream({
+  useSimPoll({
     onStatus: (status) => {
       setSimStatus(status.status);
       if (status.status === "error") {

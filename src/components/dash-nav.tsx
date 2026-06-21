@@ -10,7 +10,7 @@ import { DayPicker } from "react-day-picker";
 import { zhCN } from "react-day-picker/locale";
 import { cn } from "@/lib/utils";
 import { dayToShortDate } from "@/lib/dates";
-import { useSimStream, type SimStatusSnapshot } from "@/components/live-sim";
+import { useSimPoll, type SimStatusSnapshot } from "@/components/live-sim";
 
 // ─── Sim control bar ─────────────────────────────────────────────────────────
 
@@ -36,7 +36,7 @@ export function SimControlBar() {
     void loadInitialState();
   }, []);
 
-  useSimStream({
+  useSimPoll({
     onStatus: (status) => setSim(status),
     onEvent: (event) => {
       if (event.eventType === "board") {
@@ -195,7 +195,7 @@ export function DaySwitcher({ days }: { days: { day: number; isBoardDay: boolean
       });
   }, []);
 
-  useSimStream({
+  useSimPoll({
     onStatus: (status) => {
       setRunningDay(status.status === "running" ? status.day : null);
     },

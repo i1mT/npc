@@ -359,6 +359,20 @@ CREATE INDEX IF NOT EXISTS idx_layer_changes_day ON layer_changes(layer, day);
 CREATE INDEX IF NOT EXISTS idx_articles_day ON published_articles(day);
 CREATE INDEX IF NOT EXISTS idx_days_completed ON sim_days(completed_at);
 
+CREATE TABLE IF NOT EXISTS agent_streams (
+  stream_id   TEXT    PRIMARY KEY,
+  day         INTEGER NOT NULL,
+  agent_id    TEXT    NOT NULL,
+  agent_name  TEXT    NOT NULL,
+  event_type  TEXT    NOT NULL DEFAULT 'message',
+  content     TEXT    NOT NULL DEFAULT '',
+  status      TEXT    NOT NULL DEFAULT 'start',
+  turn        INTEGER,
+  updated_at  TEXT    NOT NULL,
+  created_at  TEXT    NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_agent_streams_day_status ON agent_streams(day, status);
+
 CREATE TABLE IF NOT EXISTS employee_soul_snapshots (
   id          TEXT    PRIMARY KEY,
   employee_id TEXT    NOT NULL,
