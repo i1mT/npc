@@ -89,10 +89,10 @@ function makeFetchArticles(ctx: AgentToolCtx) {
 }
 
 const articleSchema = z.object({
-  sourceId:      z.string().regex(/^[0-9a-f]{16,}$/, "sourceId 必须是 fetch_articles 返回的十六进制 id，不能是 URL").describe("fetch_articles 返回的 id 字段（十六进制字符串，如 a1b2c3d4e5f60001，绝对不能是 URL）"),
+  sourceId:      z.string().min(10).describe("fetch_articles 返回的 id 字段（64位十六进制字符串，如 0005c6f2a30130bb…），必须原样复制，绝对不能是 URL 或自造值"),
   titleZh:       z.string().max(60).describe("中文标题（不超过 60 字）"),
   summaryZh:     z.string().max(300).describe("中文摘要"),
-  contentZh:     z.string().min(300).max(1500).describe("中文正文，300-1200 字"),
+  contentZh:     z.string().min(100).max(2000).describe("中文正文，100-1500 字"),
   qualityScore:  z.number().min(1).max(10).describe("质量评分 1-10"),
   qualityReason: z.string().max(150).optional().describe("评分理由一句话"),
   tags:          z.array(z.string()).max(5).describe("内容标签"),
@@ -102,16 +102,26 @@ const articleSchema = z.object({
 function makePublishArticles(ctx: AgentToolCtx) {
   return createTool({
     id: "publish_articles",
-    description: "发布审核通过的文章到今日日报。总编批准后由编辑调用，一次性提交恰好 10 篇。",
+    description: "发布审核通过的文章到今日日报。总编批准后由编辑调用，提交 5-10 篇。sourceId 必须是 fetch_articles 返回的 id 原值（64位十六进制），不能是 URL。",
     inputSchema: z.object({
-      articles: z.array(articleSchema).length(10),
+      articles: z.array(articleSchema).min(5).max(12),
     }),
     execute: async (args: { articles: Array<z.infer<typeof articleSchema>> }) => {
+      const HEX_RE = /^[0-9a-f]{16,}$/i;
       const valid = args.articles.filter(
-        a => a.sourceId.length > 10 && !a.sourceId.startsWith("http"),
+        a => HEX_RE.test(a.sourceId) && !a.sourceId.startsWith("http"),
       );
-      if (valid.length !== 10) {
-        throw new Error(`publish_articles requires exactly 10 valid sourceId values, got ${valid.length}.`);
+      if (valid.length < 5) {
+        const badSamples = args.articles
+          .filter(a => !HEX_RE.test(a.sourceId) || a.sourceId.startsWith("http"))
+          .slice(0, 3)
+          .map(a => `"${a.sourceId.slice(0, 40)}"`)
+          .join(", ");
+        throw new Error(
+          `发布失败：有效 sourceId 仅 ${valid.length} 个，需要至少 5 个。` +
+          `格式错误示例：${badSamples}。` +
+          `sourceId 必须是 fetch_articles 返回的 id 字段原值（64位十六进制），请勿使用 URL 或自造值。`
+        );
       }
       const sourceById = await getArticleSourcesByIds(valid.map(a => a.sourceId));
       const toPublish = valid.map(a => ({
