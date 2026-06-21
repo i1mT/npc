@@ -1,3 +1,4 @@
+import type { Metadata } from "next";
 import { TOOL_META, TOOL_GRANTS_BY_ROLE } from "@/mastra/tools/npc-tools";
 import type { ToolName } from "@/mastra/tools/npc-tools";
 import { EvoMapConnectPanel } from "@/components/evomap-connect-panel";
@@ -5,6 +6,11 @@ import Link from "next/link";
 import { ArrowLeft, Wrench } from "lucide-react";
 
 export const dynamic = "force-dynamic";
+
+export const metadata: Metadata = {
+  title: "工具目录",
+  description: "查看 AGI Daily Agent 可调用工具、角色权限和 EvoMap 连接状态。",
+};
 
 const CATEGORY_ORDER = ["EvoMap 进化能力", "内容", "数据", "记忆", "组织", "治理", "商业"];
 const CATEGORY_COLOR: Record<string, string> = {

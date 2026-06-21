@@ -1,3 +1,4 @@
+import type { Metadata } from "next";
 import { dbAll } from "@/db/connection";
 import { listDays } from "@/db/sim";
 import { dayToShortDate } from "@/lib/dates";
@@ -6,6 +7,14 @@ import { LayoutGrid } from "lucide-react";
 import { AgentWorkLabel, OrgWorkStatusProvider } from "@/components/org-work-status";
 
 export const dynamic = "force-dynamic";
+
+export async function generateMetadata({ searchParams }: { searchParams: Promise<{ day?: string }> }): Promise<Metadata> {
+  const query = await searchParams;
+  return {
+    title: query.day ? `Day ${query.day} 组织架构` : "组织架构",
+    description: "查看 AGI Daily Agent 团队、汇报关系和组织变更。",
+  };
+}
 
 // ─── Design tokens ────────────────────────────────────────────────────────────
 

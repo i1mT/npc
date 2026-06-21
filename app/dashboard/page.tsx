@@ -1,8 +1,14 @@
+import type { Metadata } from "next";
 import { listDays } from "@/db/sim";
 import { dbFirst } from "@/db/connection";
 import type { DaySummary } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
+
+export const metadata: Metadata = {
+  title: "公司总览",
+  description: "查看 AGI Daily 的核心经营指标、每日文章数和运行状态。",
+};
 
 // ─── SVG sparkline ────────────────────────────────────────────────────────────
 
@@ -115,7 +121,7 @@ export default async function DashboardPage() {
     <div className="h-full overflow-y-auto p-6 space-y-6">
       {/* Page header */}
       <div>
-        <h1 className="font-serif text-3xl">AGI Daily 公司概览</h1>
+        <h1 className="font-serif text-3xl">AGI Daily 运营总览</h1>
         <p className="mt-1 text-sm text-ink/40">
           已运行 {days.length} 天 · {agentCount} 名 Agent · {articleCount} 篇文章 · {eventCount} 条工作事件
         </p>

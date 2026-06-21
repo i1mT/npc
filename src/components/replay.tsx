@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { HumanData } from "@/components/admin-shell";
+import { BrandLogo } from "@/components/brand/brand-logo";
 import type { PublishedArticle } from "@/lib/types";
 
 type ReplayDay = {
@@ -29,7 +30,14 @@ export function Replay({ data }: { data: ReplayDay }) {
     <main className="min-h-screen bg-paper text-ink">
       <header className="border-b-2 border-ink px-5 py-6">
         <p className="text-xs font-bold uppercase tracking-[0.28em] text-coral">daily replay</p>
-        <h1 className="font-serif text-5xl">AGI DAILY · Day {data.day}</h1>
+        <div className="mt-2 flex flex-wrap items-end gap-3">
+          <BrandLogo
+            href="/"
+            imageClassName="h-12 w-12 rounded-sm"
+            textClassName="font-serif text-5xl leading-none"
+          />
+          <span className="pb-1 font-serif text-4xl text-ink/45">Day {data.day}</span>
+        </div>
         <div className="mt-4 grid gap-3 md:grid-cols-3">
           <Info title="使命" value={data.mission} />
           <Info title="指标" value={data.metrics} />

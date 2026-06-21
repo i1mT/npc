@@ -1,8 +1,18 @@
 import { Suspense } from "react";
+import type { Metadata } from "next";
 import { listDays } from "@/db/sim";
+import { BrandLogo } from "@/components/brand/brand-logo";
 import { SimControlBar, DaySwitcher, DashSidebar } from "@/components/dash-nav";
+import { SITE_NAME } from "@/lib/brand";
 
 export const dynamic = "force-dynamic";
+
+export const metadata: Metadata = {
+  title: {
+    default: "运营控制台",
+    template: `%s | ${SITE_NAME} 运营控制台`,
+  },
+};
 
 export default async function DashboardLayout({ children }: { children: React.ReactNode }) {
   const days = (await listDays()).map(d => ({ day: d.day, isBoardDay: d.isBoardDay }));
@@ -12,12 +22,12 @@ export default async function DashboardLayout({ children }: { children: React.Re
       {/* ── Global header ── */}
       <header className="shrink-0 flex items-center justify-between gap-4 border-b border-ink bg-ink px-5 py-2.5 text-paper">
         <div className="flex items-center gap-4">
-          <a
+          <BrandLogo
             href="/dashboard"
-            className="font-serif text-base text-paper/80 hover:text-paper transition-colors tracking-tight"
-          >
-            AGI Daily
-          </a>
+            imageClassName="h-7 w-7 rounded-sm"
+            textClassName="font-serif text-base text-paper/80 tracking-tight"
+            className="hover:text-paper transition-colors"
+          />
           <span className="text-paper/15 text-sm">|</span>
           <a
             href="/"

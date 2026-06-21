@@ -3,6 +3,7 @@
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useState } from "react";
 import { Dashboard } from "@/components/dashboard";
+import { pageTitle } from "@/lib/brand";
 import type { DaySummary } from "@/lib/types";
 
 function WorkInner() {
@@ -13,6 +14,7 @@ function WorkInner() {
   const [days, setDays] = useState<DaySummary[] | null>(null);
 
   useEffect(() => {
+    document.title = pageTitle("工作日志");
     fetch("/api/days", { cache: "no-store" })
       .then(r => r.json())
       .then((data) => setDays(((data as { days: DaySummary[] }).days) ?? []));

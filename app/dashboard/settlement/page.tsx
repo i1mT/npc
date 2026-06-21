@@ -1,8 +1,14 @@
+import type { Metadata } from "next";
 import { listDays } from "@/db/sim";
 import { dayToShortDate } from "@/lib/dates";
 import { redirect } from "next/navigation";
 
 export const dynamic = "force-dynamic";
+
+export const metadata: Metadata = {
+  title: "财务日报",
+  description: "查看 AGI Daily 最新一期财务日报。",
+};
 
 export default async function SettlementIndexPage() {
   const days = await listDays();

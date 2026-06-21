@@ -1,7 +1,13 @@
+import type { Metadata } from "next";
 import { AdminShell, WorkEventCard } from "@/components/admin-shell";
 import { listDays, listWorkEvents } from "@/db/sim";
 
 export const dynamic = "force-dynamic";
+
+export const metadata: Metadata = {
+  title: "工作事件流",
+  description: "按时间顺序查看 AGI Daily Agent 团队的协作事件。",
+};
 
 export default async function EventsPage({ searchParams }: { searchParams: Promise<{ day?: string }> }) {
   const query = await searchParams;

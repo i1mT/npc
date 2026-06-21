@@ -1,5 +1,6 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
+import { BrandLogo } from "@/components/brand/brand-logo";
 import type { WorkEvent } from "@/lib/types";
 
 const navGroups = [
@@ -40,9 +41,12 @@ export function AdminShell({ title, subtitle, children }: { title: string; subti
   return (
     <main className="min-h-screen bg-[#EEEDE9] text-ink lg:grid lg:grid-cols-[220px_1fr]">
       <aside className="border-b border-rule bg-ink p-5 text-paper lg:min-h-screen lg:border-b-0 lg:border-r">
-        <Link href="/dashboard" className="font-serif text-lg text-paper/80 hover:text-paper transition-colors tracking-tight">
-          AGI Daily 后台
-        </Link>
+        <BrandLogo
+          href="/dashboard"
+          imageClassName="h-8 w-8 rounded-sm"
+          textClassName="font-serif text-lg text-paper/80 tracking-tight"
+          className="hover:text-paper transition-colors"
+        />
         <div className="mt-7 space-y-6">
           {navGroups.map((group) => (
             <nav key={group.title}>
@@ -64,7 +68,7 @@ export function AdminShell({ title, subtitle, children }: { title: string; subti
       </aside>
       <section>
         <header className="border-b border-rule bg-paper px-6 py-5">
-          <p className="text-[9px] font-bold uppercase tracking-[0.35em] text-ink/30">NPC Operations</p>
+          <p className="text-[9px] font-bold uppercase tracking-[0.35em] text-ink/30">AGI Daily Operations</p>
           <h1 className="mt-1.5 font-serif text-3xl">{title}</h1>
           {subtitle ? <p className="mt-2 text-sm text-ink/50">{subtitle}</p> : null}
         </header>

@@ -1,8 +1,9 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { ArrowLeft, Check, Loader2, Plus, Users } from "lucide-react";
+import { pageTitle } from "@/lib/brand";
 
 // ─── Role catalog ─────────────────────────────────────────────────────────────
 
@@ -150,6 +151,10 @@ function SuccessCard({ result, roleName }: { result: { id: string; joinDay: numb
 export default function HRPage() {
   const [activeRole, setActiveRole] = useState<string | null>(null);
   const [hired, setHired] = useState<Record<string, { id: string; joinDay: number }>>({});
+
+  useEffect(() => {
+    document.title = pageTitle("人才市场");
+  }, []);
 
   return (
     <div className="h-full overflow-y-auto">

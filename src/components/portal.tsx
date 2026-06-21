@@ -3,6 +3,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { CalendarDays, ExternalLink, Gauge, Newspaper, RefreshCw, Users } from "lucide-react";
 import Image from "next/image";
+import { BrandLogo } from "@/components/brand/brand-logo";
+import { SITE_KICKER } from "@/lib/brand";
 import type { DaySummary, PublishedArticle } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -38,7 +40,12 @@ export function Portal({ initialDays }: { initialDays: DaySummary[] }) {
       <main className="min-h-screen bg-paper text-ink newspaper-grid">
         <div className="mx-auto flex min-h-screen max-w-5xl flex-col items-center justify-center px-6 text-center">
           <Newspaper className="mb-6 h-12 w-12 text-cobalt" />
-          <h1 className="font-serif text-5xl">AGI DAILY</h1>
+          <BrandLogo
+            href="/"
+            imageClassName="mx-auto h-14 w-14 rounded-sm"
+            textClassName="font-serif text-5xl leading-none"
+            className="flex-col gap-3"
+          />
           <p className="mt-4 max-w-xl text-lg text-ink/70">还没有已发布期次。请先在后台运行模拟，生成内容后这里会按日期展示。</p>
           <a className="mt-8 border border-ink px-5 py-3 text-sm font-bold uppercase tracking-wide hover:bg-ink hover:text-paper" href="/dashboard">
             打开后台
@@ -56,8 +63,13 @@ export function Portal({ initialDays }: { initialDays: DaySummary[] }) {
       <header className="border-b-2 border-ink px-4 py-5 md:px-8">
         <div className="mx-auto flex max-w-7xl flex-col gap-4 md:flex-row md:items-end md:justify-between">
           <div>
-            <p className="text-xs font-bold uppercase tracking-[0.28em] text-coral">AI industry newspaper</p>
-            <h1 className="font-serif text-5xl leading-none md:text-7xl">AGI DAILY</h1>
+            <p className="text-xs font-bold uppercase tracking-[0.28em] text-coral">{SITE_KICKER}</p>
+            <BrandLogo
+              href="/"
+              imageClassName="h-14 w-14 rounded-sm md:h-16 md:w-16"
+              textClassName="font-serif text-5xl leading-none md:text-7xl"
+              className="mt-2"
+            />
             {selected?.editorNote ? <p className="mt-3 max-w-3xl border-t border-ink pt-3 text-sm leading-6 text-ink/75">{selected.editorNote}</p> : null}
           </div>
           <div className="flex flex-wrap items-center gap-4 text-sm">
