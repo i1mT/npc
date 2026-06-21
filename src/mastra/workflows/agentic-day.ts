@@ -258,15 +258,25 @@ async function* readUnknownStream<T>(stream: AsyncIterable<T> | ReadableStream<T
 
 // ─── System prompt ────────────────────────────────────────────────────────────
 
+function buildMentionLine(agents: Array<{ handle: string; displayName: string; roleTemplate: string }>): string {
+  const entries = agents.map(a => {
+    const labels = ROLE_LABELS[a.roleTemplate] ?? [];
+    const label = labels[0] ?? a.displayName;
+    return `@${label}（${a.displayName}）`;
+  });
+  return entries.length ? entries.join("、") : "（暂无其他成员）";
+}
+
 function buildSystemPrompt(
   day: number,
   state: DayState,
   topicHistory: string,
-  teamLabels: string,
+  agents: Array<{ handle: string; displayName: string; roleTemplate: string }>,
   feedbackCtx?: Awaited<ReturnType<typeof getYesterdayFeedbackContext>>,
 ): string {
   const date = new Date(Date.UTC(2026, 5, day)); // Day 1 = 2026-06-01
   const dateStr = date.toISOString().slice(0, 10);
+  const teamLabels = agents.map(a => `${a.displayName}（${a.roleTemplate}）`).join("、");
   const parts = [
     `今天是 Day ${day}（${dateStr}），AGI Daily 编辑部。`,
     `📊 当前指标：DAU ${state.dau.toLocaleString()}，声誉 ${state.reputation.toFixed(1)}，资金 ¥${Math.round(state.capital).toLocaleString()}`,
@@ -279,7 +289,8 @@ function buildSystemPrompt(
     evomapExperienceInstruction,
     "",
     "【@提及规则】",
-    "- 用 @总编 提及总编，@编辑 提及编辑，@增长 提及增长 Agent，@商业 提及商业 Agent，@专栏 提及专栏 Agent",
+    `- 今日可用 @提及：${buildMentionLine(agents)}`,
+    "- 只能 @提及上方列出的成员；不在列表中的角色今日尚未入职，不要凭空 @提及",
     "- 被 @提及 的 Agent 会在下一轮收到通知并回应",
     "- 工具调用结果需在群里汇报要点",
     "",
@@ -307,13 +318,13 @@ const ROLE_PROMPTS: Record<string, string> = {
   "editor-in-chief": [
     "你是总编 Agent，负责今日工作的统筹协调。",
     "你必须以公司的七层约束做决策：使命层、能力层、记忆层、组织层、规则层、资源层、生长协议层。",
-    "规则层硬约束：每日 AGI Daily 必须恰好发布 10 篇文章，不多不少；少于 10 篇时不能批准发布，必须要求 @编辑 继续补齐。",
+    "规则层硬约束：每日 AGI Daily 必须发布至少 8 篇文章；不足时不能批准发布，须要求编辑继续补齐。",
     "**今日开场任务**：",
     "  - 简短问候团队，说明今日重点方向",
-    "  - 调用 get_metrics 或 fetch_articles 了解现状",
-    "  - 明确 @编辑 去选稿，@增长 分析增长机会，@商业 汇报广告情况，@专栏 给出栏目建议（只@你们团队中实际存在的人）",
-    "  - 根据大家汇报的情况，审核编辑选稿并决定是否发布；只有恰好 10 篇且符合规则层约束时才批准",
-    "⚠️ 批准发布后 @编辑 让他发布，不要自己调用 publish_articles。",
+    "  - 调用 get_metrics 了解现状",
+    "  - 根据【当前团队】中实际存在的成员，按角色分配任务（用 @提及规则 中列出的 @名字 通知对应人）",
+    "  - 审核编辑选稿，决定是否批准发布",
+    "⚠️ 批准发布后请 @编辑 让他执行发布，不要自己调用 publish_articles。",
   ].join("\n"),
 
   "editor": [
@@ -407,9 +418,8 @@ export async function runAgenticDay(day: number): Promise<DayState> {
     : { day, capital: 10000, reputation: 62, dau: 1200, subscribers: 260, adRevenue: 0, llmCost: 0, isBoardDay: day % 7 === 0 };
 
   const topicHistory = formatTopicHistory(await getTopicPerformanceLast7Days(day));
-  const teamLabels   = (await listActiveEmployeeLabels()).map(e => `${e.display_name}(${e.role_template})`).join("、");
   const feedbackCtx  = day > 1 ? await getYesterdayFeedbackContext(day - 1) : null;
-  const systemPrompt = buildSystemPrompt(day, base, topicHistory, teamLabels, feedbackCtx ?? undefined);
+  const systemPrompt = buildSystemPrompt(day, base, topicHistory, runtime.agents, feedbackCtx ?? undefined);
 
   // Chat history accumulated as plain text lines (easier to pass to LLM)
   const chatLines: string[] = [systemPrompt, ""];
