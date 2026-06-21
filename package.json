@@ -5,25 +5,44 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
+    "preview": "opennextjs-cloudflare build && opennextjs-cloudflare preview",
+    "deploy": "opennextjs-cloudflare build && opennextjs-cloudflare deploy",
+    "upload": "opennextjs-cloudflare build && opennextjs-cloudflare upload",
+    "cf-typegen": "wrangler types --env-interface CloudflareEnv cloudflare-env.d.ts",
     "start": "next start",
     "lint": "next lint",
     "verify:3days": "tsx scripts/verify-3days.ts",
+    "verify:real-llm": "tsx scripts/verify-real-llm-acceptance.ts",
+    "verify:real-llm-full": "tsx scripts/verify-real-llm-full.ts",
     "verify:board": "tsx scripts/verify-board.ts",
+    "verify:agent-prompts": "tsx scripts/verify-agent-prompt-contracts.ts",
+    "verify:tavily-cover": "tsx scripts/verify-tavily-cover.ts",
     "sim:reset": "tsx scripts/reset-sim.ts"
   },
   "dependencies": {
+    "@ai-sdk/openai": "^3.0.73",
+    "@mastra/cloudflare-d1": "^1.1.0",
     "@mastra/core": "^1.45.0",
+    "@mastra/libsql": "^1.13.2",
+    "@mastra/mcp": "^1.11.0",
+    "@mastra/memory": "^1.20.5",
+    "@opennextjs/cloudflare": "^1.19.11",
     "@types/better-sqlite3": "^7.6.13",
     "better-sqlite3": "^11.10.0",
     "clsx": "^2.1.1",
     "lucide-react": "^0.468.0",
     "next": "^15.1.4",
     "react": "^19.0.0",
+    "react-day-picker": "^10.0.1",
     "react-dom": "^19.0.0",
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.1",
     "tailwind-merge": "^2.6.0",
     "zod": "^3.24.1"
   },
   "devDependencies": {
+    "@cloudflare/workers-types": "^4.20260621.1",
+    "@next/env": "^16.2.9",
     "@types/node": "^22.10.5",
     "@types/react": "^19.0.2",
     "@types/react-dom": "^19.0.2",
@@ -33,6 +52,7 @@
     "postcss": "^8.4.49",
     "tailwindcss": "^3.4.17",
     "tsx": "^4.19.2",
-    "typescript": "^5.7.2"
+    "typescript": "^5.7.2",
+    "wrangler": "^4.103.0"
   }
 }

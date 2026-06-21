@@ -1,4 +1,5 @@
 import type { AgentDefinition, ArticleSource, PublishedArticle } from "@/lib/types";
+import { evomapExperienceInstruction } from "@/mastra/role-templates";
 import { scoreArticle } from "@/simulation/formulas";
 
 export const editorAgent: AgentDefinition = {
@@ -10,6 +11,7 @@ export const editorAgent: AgentDefinition = {
     "每天从文章池筛选今日最重要的 10 篇，优先 24h 内并兼顾话题多样性。",
     "每篇改写为中文友好格式：标题、摘要、正文解读，并给出质量分。",
     "必须有 source_url；禁止机器直译；每期固定 10 篇。",
+    evomapExperienceInstruction,
   ].join("\n"),
 };
 

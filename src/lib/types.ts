@@ -1,4 +1,4 @@
-export type SimStatus = "idle" | "running" | "paused";
+export type SimStatus = "idle" | "running" | "paused" | "error";
 
 export type EventType =
   | "thinking"
@@ -6,7 +6,14 @@ export type EventType =
   | "tool_call"
   | "tool_result"
   | "decision"
-  | "board";
+  | "board"
+  | "settlement"
+  | "memory_write"
+  | "memory_read"
+  | "org_change"
+  | "growth_trigger"
+  | "rule_trigger"
+  | "error";
 
 export type DayState = {
   day: number;
@@ -104,6 +111,7 @@ export type ArticleSource = {
 export type DaySummary = DayState & {
   articleCount: number;
   completedAt: string | null;
+  editorNote: string | null;
 };
 
 export type RuleDefinition = {
@@ -120,6 +128,8 @@ export type BoardMeeting = {
   day: number;
   status: BoardMeetingStatus;
   weeklyReport: Record<string, unknown>;
+  autoDirective: string | null;
+  autoDirectiveReason: string | null;
   directive: string | null;
   suspendedAt: string;
   resumedAt: string | null;

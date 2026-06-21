@@ -6,7 +6,7 @@ export const dynamic = "force-dynamic";
 
 export default async function ReplayPage({ searchParams }: { searchParams: Promise<{ day?: string }> }) {
   const query = await searchParams;
-  const days = listDays();
+  const days = await listDays();
   const day = Number(query.day ?? days[0]?.day ?? 1);
-  return <Replay data={getPortalDay(day)} />;
+  return <Replay data={await getPortalDay(day)} />;
 }

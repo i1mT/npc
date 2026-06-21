@@ -7,6 +7,7 @@ CREATE TABLE IF NOT EXISTS sim_days (
   ad_revenue    REAL    NOT NULL,
   llm_cost      REAL    NOT NULL,
   is_board_day  INTEGER NOT NULL DEFAULT 0,
+  editor_note   TEXT,
   completed_at  TEXT
 );
 
@@ -61,6 +62,8 @@ CREATE TABLE IF NOT EXISTS board_meetings (
   day           INTEGER PRIMARY KEY,
   status        TEXT NOT NULL,
   weekly_report TEXT NOT NULL,
+  auto_directive TEXT,
+  auto_directive_reason TEXT,
   directive     TEXT,
   suspended_at  TEXT NOT NULL,
   resumed_at    TEXT
@@ -202,6 +205,9 @@ CREATE TABLE IF NOT EXISTS employees (
   joined_day      INTEGER NOT NULL,
   left_day        INTEGER,
   system_prompt   TEXT NOT NULL,
+  soul            TEXT,
+  tools_granted   TEXT,
+  memory          TEXT,
   agent_handle    TEXT NOT NULL,
   caused_by_event TEXT NOT NULL
 );
@@ -349,3 +355,43 @@ CREATE INDEX IF NOT EXISTS idx_work_events_layer ON work_events(layer, day);
 CREATE INDEX IF NOT EXISTS idx_layer_changes_day ON layer_changes(layer, day);
 CREATE INDEX IF NOT EXISTS idx_articles_day ON published_articles(day);
 CREATE INDEX IF NOT EXISTS idx_days_completed ON sim_days(completed_at);
+
+CREATE TABLE IF NOT EXISTS employee_soul_snapshots (
+  id          TEXT    PRIMARY KEY,
+  employee_id TEXT    NOT NULL,
+  day         INTEGER NOT NULL,
+  soul_md     TEXT    NOT NULL,
+  memory_md   TEXT    NOT NULL,
+  created_at  TEXT    NOT NULL,
+  UNIQUE(employee_id, day)
+);
+
+CREATE INDEX IF NOT EXISTS idx_soul_snapshots_employee ON employee_soul_snapshots(employee_id, day);
+
+CREATE TABLE IF NOT EXISTS article_reviews (
+  id               TEXT PRIMARY KEY,
+  article_id       TEXT NOT NULL,
+  day              INTEGER NOT NULL,
+  score_info       REAL NOT NULL DEFAULT 0,
+  score_read       REAL NOT NULL DEFAULT 0,
+  score_timeliness REAL NOT NULL DEFAULT 0,
+  score_unique     REAL NOT NULL DEFAULT 0,
+  score_ai_rel     REAL NOT NULL DEFAULT 0,
+  score_overall    REAL NOT NULL DEFAULT 0,
+  comment          TEXT NOT NULL,
+  created_at       TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_article_reviews_day ON article_reviews(day);
+CREATE INDEX IF NOT EXISTS idx_article_reviews_article ON article_reviews(article_id);
+
+CREATE TABLE IF NOT EXISTS human_comments (
+  id          TEXT PRIMARY KEY,
+  article_id  TEXT NOT NULL,
+  day         INTEGER NOT NULL,
+  author_name TEXT NOT NULL,
+  content     TEXT NOT NULL,
+  created_at  TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_human_comments_article ON human_comments(article_id);
+CREATE INDEX IF NOT EXISTS idx_human_comments_day ON human_comments(day);
+

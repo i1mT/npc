@@ -1,7 +1,13 @@
 .next
+.open-next
+.wrangler
+cloudflare-env.d.ts
+*.tsbuildinfo
 node_modules
 sim.db
+memory.db*
 *.log
 .env
 .env.local
+.evomap/
 agidaily.db

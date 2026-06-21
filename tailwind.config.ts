@@ -5,18 +5,21 @@ const config: Config = {
   theme: {
     extend: {
       fontFamily: {
-        sans: ["var(--font-sans)", "Inter", "system-ui", "sans-serif"],
+        sans:  ["var(--font-sans)", "Inter", "system-ui", "sans-serif"],
         serif: ["var(--font-serif)", "Georgia", "serif"],
       },
       colors: {
-        ink: "#161616",
-        paper: "#f7f3ea",
-        rule: "#d8d0c2",
-        cobalt: "#254edb",
-        signal: "#f6c445",
-        mint: "#4fbf87",
-        coral: "#e45c3a"
-      }
+        ink:      "#131313",
+        paper:    "#F6F5F1",
+        rule:     "#E0DDD6",
+        caption:  "#8C8881",
+        cobalt:   "#1a3a7a",
+        signal:   "#f6c445",
+        mint:     "#4fbf87",
+        coral:    "#e45c3a",
+        midnight: "#0d1117",
+        accent:   "#C41230",
+      },
     },
   },
   plugins: [],
