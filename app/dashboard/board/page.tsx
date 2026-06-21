@@ -1,7 +1,13 @@
+import type { Metadata } from "next";
 import { AdminShell, HumanData, Panel } from "@/components/admin-shell";
 import { dbAll } from "@/db/connection";
 
 export const dynamic = "force-dynamic";
+
+export const metadata: Metadata = {
+  title: "董事会记录",
+  description: "查看 AGI Daily 每 7 天触发的董事会周报、指令和恢复状态。",
+};
 
 export default async function BoardPage() {
   const [meetings, directives] = await Promise.all([
@@ -9,7 +15,7 @@ export default async function BoardPage() {
     dbAll<{ id: string; day: number; directive: string; applied_at: string }>("SELECT * FROM board_directives ORDER BY day DESC, applied_at DESC"),
   ]);
   return (
-    <AdminShell title="董事会记录" subtitle="查看每 7 天挂起、周报、指令和 resume 状态。">
+    <AdminShell title="董事会记录" subtitle="查看每 7 天挂起、周报、指令和恢复状态。">
       <div className="grid gap-4 lg:grid-cols-2">
         <Panel title="Board Workflow">
           <div className="space-y-3">

@@ -1,7 +1,7 @@
 "use client";
 
 import React, { createContext, useContext, useMemo, useState } from "react";
-import { useSimStream } from "@/components/live-sim";
+import { useSimPoll } from "@/components/live-sim";
 
 const ActiveAgentsContext = createContext<Set<string>>(new Set());
 
@@ -12,7 +12,7 @@ function removeStream(streamIds: string[] | undefined, streamId: string) {
 export function OrgWorkStatusProvider({ children }: { children: React.ReactNode }) {
   const [streamsByAgent, setStreamsByAgent] = useState<Record<string, string[]>>({});
 
-  useSimStream({
+  useSimPoll({
     onStatus: (status) => {
       if (status.status !== "running") setStreamsByAgent({});
     },

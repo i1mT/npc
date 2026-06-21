@@ -1,8 +1,14 @@
+import type { Metadata } from "next";
 import { listRules } from "@/db/sim";
 import Link from "next/link";
 import { ArrowLeft, Shield, Zap } from "lucide-react";
 
 export const dynamic = "force-dynamic";
+
+export const metadata: Metadata = {
+  title: "运营规则",
+  description: "查看 AGI Daily 的选题、发布、审核、治理和经营公式规则。",
+};
 
 const GROUP_STYLE: Record<string, { icon: string; bg: string; badge: string; badgeText: string }> = {
   "选题规则": { icon: "🎯", bg: "#f0f4ff", badge: "bg-cobalt/15 text-cobalt",       badgeText: "选题" },

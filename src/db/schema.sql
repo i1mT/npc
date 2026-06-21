@@ -6,6 +6,8 @@ CREATE TABLE IF NOT EXISTS sim_days (
   subscribers   INTEGER NOT NULL,
   ad_revenue    REAL    NOT NULL,
   llm_cost      REAL    NOT NULL,
+  labor_cost    REAL    NOT NULL DEFAULT 0,
+  avg_quality   REAL    NOT NULL DEFAULT 0,
   is_board_day  INTEGER NOT NULL DEFAULT 0,
   editor_note   TEXT,
   completed_at  TEXT
@@ -208,6 +210,7 @@ CREATE TABLE IF NOT EXISTS employees (
   soul            TEXT,
   tools_granted   TEXT,
   memory          TEXT,
+  daily_salary    REAL NOT NULL DEFAULT 300,
   agent_handle    TEXT NOT NULL,
   caused_by_event TEXT NOT NULL
 );
@@ -356,6 +359,20 @@ CREATE INDEX IF NOT EXISTS idx_layer_changes_day ON layer_changes(layer, day);
 CREATE INDEX IF NOT EXISTS idx_articles_day ON published_articles(day);
 CREATE INDEX IF NOT EXISTS idx_days_completed ON sim_days(completed_at);
 
+CREATE TABLE IF NOT EXISTS agent_streams (
+  stream_id   TEXT    PRIMARY KEY,
+  day         INTEGER NOT NULL,
+  agent_id    TEXT    NOT NULL,
+  agent_name  TEXT    NOT NULL,
+  event_type  TEXT    NOT NULL DEFAULT 'message',
+  content     TEXT    NOT NULL DEFAULT '',
+  status      TEXT    NOT NULL DEFAULT 'start',
+  turn        INTEGER,
+  updated_at  TEXT    NOT NULL,
+  created_at  TEXT    NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_agent_streams_day_status ON agent_streams(day, status);
+
 CREATE TABLE IF NOT EXISTS employee_soul_snapshots (
   id          TEXT    PRIMARY KEY,
   employee_id TEXT    NOT NULL,
@@ -395,3 +412,22 @@ CREATE TABLE IF NOT EXISTS human_comments (
 CREATE INDEX IF NOT EXISTS idx_human_comments_article ON human_comments(article_id);
 CREATE INDEX IF NOT EXISTS idx_human_comments_day ON human_comments(day);
 
+CREATE TABLE IF NOT EXISTS items (
+  id           TEXT PRIMARY KEY,
+  url          TEXT UNIQUE NOT NULL,
+  source_url   TEXT NOT NULL,
+  title        TEXT,
+  author       TEXT,
+  summary      TEXT,
+  content      TEXT,
+  image_url    TEXT,
+  cover_img    TEXT,
+  tags         TEXT,
+  translations TEXT,
+  pub_date     TEXT,
+  fetched_at   TEXT NOT NULL,
+  pushed_at    TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_items_source ON items(source_url);
+CREATE INDEX IF NOT EXISTS idx_items_fetched ON items(fetched_at);
+CREATE INDEX IF NOT EXISTS idx_items_pushed ON items(pushed_at);

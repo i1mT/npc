@@ -894,3 +894,62 @@ export function listRules(): RuleDefinition[] {
     },
   ];
 }
+
+export async function listEventsSince(day: number, afterSeq: number) {
+  const rows = await dbAll<EventRow>(
+    "SELECT * FROM sim_events WHERE day = ? AND seq > ? ORDER BY seq ASC LIMIT 100",
+    day,
+    afterSeq,
+  );
+  return rows.map(mapEvent);
+}
+
+export async function upsertAgentStream(update: {
+  streamId: string;
+  day: number;
+  agentId: string;
+  agentName: string;
+  eventType: string;
+  content: string;
+  status: "start" | "delta" | "done" | "error";
+  turn?: number;
+}) {
+  const now = new Date().toISOString();
+  await dbRun(
+    `INSERT INTO agent_streams (stream_id, day, agent_id, agent_name, event_type, content, status, turn, updated_at, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(stream_id) DO UPDATE SET
+       content    = excluded.content,
+       status     = excluded.status,
+       updated_at = excluded.updated_at`,
+    update.streamId,
+    update.day,
+    update.agentId,
+    update.agentName,
+    update.eventType,
+    update.content,
+    update.status,
+    update.turn ?? null,
+    now,
+    now,
+  );
+}
+
+export async function listActiveAgentStreams(day: number) {
+  return dbAll<{
+    stream_id: string;
+    day: number;
+    agent_id: string;
+    agent_name: string;
+    event_type: string;
+    content: string;
+    status: string;
+    turn: number | null;
+  }>(
+    `SELECT stream_id, day, agent_id, agent_name, event_type, content, status, turn
+     FROM agent_streams
+     WHERE day = ? AND status NOT IN ('done', 'error')
+     ORDER BY turn ASC, created_at ASC`,
+    day,
+  );
+}

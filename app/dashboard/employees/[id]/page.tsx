@@ -1,3 +1,4 @@
+import type { Metadata } from "next";
 import { dbAll, dbFirst } from "@/db/connection";
 import type { RoleTemplateName } from "@/mastra/role-templates";
 import { TOOL_META } from "@/mastra/tools/npc-tools";
@@ -8,6 +9,21 @@ import { ArrowLeft, Bot, Calendar, Clock, Wrench, Brain, Sparkles } from "lucide
 import { MarkdownView } from "@/components/markdown-view";
 
 export const dynamic = "force-dynamic";
+
+export async function generateMetadata({ params }: { params: Promise<{ id: string }> }): Promise<Metadata> {
+  const { id } = await params;
+  const employee = await dbFirst<{ display_name: string; role_template: string }>(
+    "SELECT display_name, role_template FROM employees WHERE id = ? OR agent_handle = ?",
+    id,
+    id,
+  );
+  return {
+    title: employee ? `${employee.display_name} · Agent 档案` : "Agent 档案",
+    description: employee
+      ? `查看 ${employee.display_name} 在 AGI Daily 的角色、工具、记忆和工作记录。`
+      : "查看 AGI Daily Agent 档案。",
+  };
+}
 
 // ─── Design tokens ────────────────────────────────────────────────────────────
 

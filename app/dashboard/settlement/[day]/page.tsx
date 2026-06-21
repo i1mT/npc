@@ -1,3 +1,4 @@
+import type { Metadata } from "next";
 import { listDays } from "@/db/sim";
 import { dbAll, dbFirst } from "@/db/connection";
 import { notFound } from "next/navigation";
@@ -5,6 +6,14 @@ import { dayToShortDate } from "@/lib/dates";
 import { SUBSCRIPTION_DAILY_PRICE, subscriptionRevenue } from "@/simulation/formulas";
 
 export const dynamic = "force-dynamic";
+
+export async function generateMetadata({ params }: { params: Promise<{ day: string }> }): Promise<Metadata> {
+  const { day } = await params;
+  return {
+    title: `Day ${day} 财务日报`,
+    description: `查看 AGI Daily Day ${day} 的收入、成本、利润和经营指标变化。`,
+  };
+}
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 type AgentToken = {

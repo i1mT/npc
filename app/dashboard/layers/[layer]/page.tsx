@@ -1,3 +1,4 @@
+import type { Metadata } from "next";
 import { HumanData, WorkEventCard } from "@/components/admin-shell";
 import { getLayerDay, listDays } from "@/db/sim";
 import { dayToShortDate } from "@/lib/dates";
@@ -14,6 +15,21 @@ const layerMeta: Record<LayerName, { title: string; accent: string; desc: string
   resource:    { title: "资源织网", accent: "border-signal",        desc: "资本、DAU、声誉等核心指标" },
   growth:      { title: "生长协议", accent: "border-[#0891b2]",     desc: "Agent 生长/收缩决策记录" },
 };
+
+export async function generateMetadata({
+  params,
+  searchParams,
+}: {
+  params: Promise<{ layer: string }>;
+  searchParams: Promise<{ day?: string }>;
+}): Promise<Metadata> {
+  const [{ layer }, query] = await Promise.all([params, searchParams]);
+  const meta = layerMeta[layer as LayerName];
+  return {
+    title: meta ? `${query.day ? `Day ${query.day} ` : ""}${meta.title}` : "七层资产",
+    description: meta?.desc ?? "查看 AGI Daily 七层资产状态。",
+  };
+}
 
 export default async function LayerPage({
   params,

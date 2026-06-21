@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { AlertTriangle, RotateCcw, CheckCircle2, Undo2 } from "lucide-react";
+import { pageTitle } from "@/lib/brand";
 import type { DaySummary } from "@/lib/types";
 
 export default function SystemPage() {
@@ -25,6 +26,7 @@ export default function SystemPage() {
   const [rollbackError, setRollbackError] = useState("");
 
   useEffect(() => {
+    document.title = pageTitle("系统管理");
     fetch("/api/days", { cache: "no-store" })
       .then(r => r.json())
       .then((data) => {

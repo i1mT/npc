@@ -1,14 +1,34 @@
 import Link from "next/link";
 import Image from "next/image";
+import type { Metadata } from "next";
 import { notFound } from "next/navigation";
+import { BrandLogo } from "@/components/brand/brand-logo";
 import { getArticle, getDay, listPublishedArticles } from "@/db/sim";
 import { dbAll } from "@/db/connection";
 import { listReviewsByArticle, listHumanCommentsByArticle } from "@/db/feedback";
 import { CommentBox } from "@/components/comment-box";
 import { tagAccent } from "@/lib/cover";
 import { dayToLongDate, dayToShortDate } from "@/lib/dates";
+import { LOGO_PATH, SITE_NAME } from "@/lib/brand";
 
 export const dynamic = "force-dynamic";
+
+export async function generateMetadata({ params }: { params: Promise<{ id: string }> }): Promise<Metadata> {
+  const { id } = await params;
+  const article = await getArticle(id);
+  if (!article) return { title: "文章未找到" };
+  return {
+    title: article.titleZh,
+    description: article.summaryZh,
+    openGraph: {
+      title: article.titleZh,
+      description: article.summaryZh,
+      siteName: SITE_NAME,
+      images: [{ url: article.imageUrl || LOGO_PATH, alt: article.titleZh }],
+      type: "article",
+    },
+  };
+}
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -81,9 +101,12 @@ export default async function ArticlePage({ params }: { params: Promise<{ id: st
       {/* ── Site nav ── */}
       <nav className="sticky top-0 z-50 bg-ink text-paper border-b border-paper/8">
         <div className="mx-auto max-w-[1200px] px-6 py-3 flex items-center justify-between">
-          <Link href="/" className="font-serif text-lg text-paper hover:text-paper/70 transition-colors">
-            AGI Daily
-          </Link>
+          <BrandLogo
+            href="/"
+            imageClassName="h-7 w-7 rounded-sm"
+            textClassName="font-serif text-lg text-paper"
+            className="hover:text-paper/70 transition-colors"
+          />
           <div className="flex items-center gap-6">
             <Link
               href={`/?day=${article.day}`}
@@ -201,9 +224,7 @@ export default async function ArticlePage({ params }: { params: Promise<{ id: st
             {/* Attribution */}
             <div className="border-t-2 border-ink pt-6 mb-10 flex items-center justify-between">
               <div className="flex items-center gap-3">
-                <div className="w-8 h-8 bg-ink flex items-center justify-center shrink-0">
-                  <span className="text-paper text-xs font-bold">A</span>
-                </div>
+                <BrandLogo href="/" showText={false} imageClassName="h-8 w-8 rounded-sm" />
                 <div>
                   <p className="text-[10px] font-bold text-ink/70 uppercase tracking-[0.2em]">AGI Daily 编辑部</p>
                   <p className="text-[9px] text-ink/30 mt-0.5">{displayDate} · AI Agent 团队加工整理</p>
@@ -324,9 +345,12 @@ export default async function ArticlePage({ params }: { params: Promise<{ id: st
       {/* ── Footer ── */}
       <footer className="border-t-2 border-ink mt-8 py-10 bg-ink">
         <div className="mx-auto max-w-[1200px] px-6 flex flex-col sm:flex-row items-center justify-between gap-4">
-          <Link href="/" className="font-serif text-xl text-paper/60 hover:text-paper transition-colors">
-            AGI Daily
-          </Link>
+          <BrandLogo
+            href="/"
+            imageClassName="h-8 w-8 rounded-sm"
+            textClassName="font-serif text-xl text-paper/60"
+            className="hover:text-paper transition-colors"
+          />
           <span className="text-[9px] font-bold uppercase tracking-[0.35em] text-paper/20">
             内容由 AI Agent 团队自动生成 · 仅供模拟演示
           </span>

@@ -1,9 +1,17 @@
 import Link from "next/link";
 import Image from "next/image";
+import type { Metadata } from "next";
+import { BrandLogo } from "@/components/brand/brand-logo";
 import { listDays, listPublishedArticles, getDay } from "@/db/sim";
+import { SITE_KICKER, SITE_NAME, SITE_TAGLINE } from "@/lib/brand";
 import type { PublishedArticle } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
+
+export const metadata: Metadata = {
+  title: "AI 行业日报",
+  description: "AGI Daily 每日筛选、改写和追踪全球 AGI 进展。",
+};
 
 // ─── Category tabs ────────────────────────────────────────────────────────────
 
@@ -132,14 +140,16 @@ export default async function Page({
 
           {/* Masthead */}
           <div className="text-center py-6">
-            <Link href="/" className="inline-block">
-              <h1 className="font-serif text-[42px] md:text-[52px] font-bold leading-none tracking-tight">
-                AGI Daily
-              </h1>
-            </Link>
-            <p className="mt-1.5 text-sm text-ink/45">跟踪世界 AGI 进展</p>
+            <BrandLogo
+              href="/"
+              priority
+              imageClassName="mx-auto mb-3 h-16 w-16 rounded-sm"
+              textClassName="block font-serif text-[42px] md:text-[52px] font-bold leading-none tracking-tight"
+              className="inline-flex flex-col gap-0"
+            />
+            <p className="mt-1.5 text-sm text-ink/45">{SITE_TAGLINE}</p>
             <p className="mt-1 text-[9px] font-bold uppercase tracking-[0.45em] text-ink/22">
-              AGI Intelligence · Daily
+              {SITE_KICKER}
             </p>
           </div>
 
@@ -284,7 +294,7 @@ export default async function Page({
       {/* ── Footer ── */}
       <footer className="border-t border-rule mt-8 py-6">
         <div className="mx-auto max-w-[1200px] px-6 flex items-center justify-between">
-          <Link href="/" className="font-serif text-lg font-bold">AGI Daily</Link>
+          <BrandLogo href="/" imageClassName="h-7 w-7 rounded-sm" textClassName="font-serif text-lg font-bold" />
           <span className="text-[9px] text-ink/20 uppercase tracking-[0.3em]">AI Agent 团队驱动</span>
           <a href="/dashboard" className="text-[9px] text-ink/25 hover:text-ink/55 transition-colors uppercase tracking-[0.25em]">
             后台 →

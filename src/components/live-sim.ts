@@ -83,6 +83,115 @@ export function useSimStream(handlers: SimStreamHandlers) {
   }, []);
 }
 
+const DEFAULT_STATE: DayState = {
+  day: 0,
+  capital: 10000,
+  reputation: 62,
+  dau: 1200,
+  subscribers: 260,
+  adRevenue: 0,
+  llmCost: 0,
+  isBoardDay: false,
+};
+
+type PollResponse = {
+  status: string;
+  day: number;
+  runningDay?: number | null;
+  state: DayState | null;
+  events: SimEvent[];
+  agentStreams: AgentStreamUpdate[];
+};
+
+export function useSimPoll(handlers: SimStreamHandlers) {
+  const handlersRef = useRef(handlers);
+  handlersRef.current = handlers;
+
+  const cursorRef = useRef<{ day: number; afterSeq: number }>({ day: 0, afterSeq: -1 });
+  const prevStreamIdsRef = useRef(new Set<string>());
+  const lastStreamUpdatesRef = useRef(new Map<string, AgentStreamUpdate>());
+  const readyFiredRef = useRef(false);
+  const lastStatusRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    let stopped = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+
+    async function poll() {
+      if (stopped) return;
+      const { day, afterSeq } = cursorRef.current;
+      const params = new URLSearchParams();
+      if (day > 0) params.set("day", String(day));
+      params.set("afterSeq", String(afterSeq));
+
+      try {
+        const res = await fetch(`/api/sim/poll?${params}`, { cache: "no-store" });
+        if (!res.ok) throw new Error(`poll ${res.status}`);
+        const data = await res.json() as PollResponse;
+        if (stopped) return;
+
+        if (!readyFiredRef.current) {
+          readyFiredRef.current = true;
+          handlersRef.current.onReady?.();
+        }
+
+        const statusSnap: SimStatusSnapshot = {
+          day: data.day,
+          status: data.status as SimStatus,
+          state: data.state ?? DEFAULT_STATE,
+          runningDay: data.runningDay ?? null,
+        };
+        if (lastStatusRef.current !== data.status) {
+          lastStatusRef.current = data.status;
+          handlersRef.current.onStatus?.(statusSnap);
+        }
+
+        // day 切换时重置 cursor
+        const targetDay = data.runningDay ?? data.day;
+        if (cursorRef.current.day === 0) {
+          cursorRef.current = { day: targetDay, afterSeq: -1 };
+        } else if (data.runningDay && data.runningDay !== cursorRef.current.day) {
+          cursorRef.current = { day: data.runningDay, afterSeq: -1 };
+        }
+
+        if (data.events.length > 0) {
+          const maxSeq = Math.max(...data.events.map(e => e.seq));
+          cursorRef.current = { ...cursorRef.current, afterSeq: maxSeq };
+          for (const ev of data.events) handlersRef.current.onEvent?.(ev);
+        }
+
+        // 检测消失的 stream，合成 done 事件
+        const currentIds = new Set(data.agentStreams.map(s => s.streamId));
+        for (const prevId of prevStreamIdsRef.current) {
+          if (!currentIds.has(prevId)) {
+            const last = lastStreamUpdatesRef.current.get(prevId);
+            if (last) {
+              handlersRef.current.onAgentStream?.({ ...last, status: "done", delta: "" });
+              lastStreamUpdatesRef.current.delete(prevId);
+            }
+          }
+        }
+        prevStreamIdsRef.current = currentIds;
+
+        for (const stream of data.agentStreams) {
+          lastStreamUpdatesRef.current.set(stream.streamId, stream);
+          handlersRef.current.onAgentStream?.(stream);
+        }
+      } catch (err) {
+        if (!stopped) console.warn("[sim-poll]", err);
+      }
+
+      if (!stopped) timer = setTimeout(poll, 1000);
+    }
+
+    void poll();
+    return () => {
+      stopped = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, []);
+}
+
 function dispatchSseEvent(rawEvent: string, handlers: SimStreamHandlers) {
   let eventName = "message";
   const dataLines: string[] = [];
