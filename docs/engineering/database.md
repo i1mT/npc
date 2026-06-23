@@ -1,11 +1,13 @@
 # 数据库规范
 
-本项目当前使用本地 SQLite，通过 `better-sqlite3` 同步访问。数据库文件由 `src/db/connection.ts` 管理，schema 定义位于 `src/db/schema.sql`，主要读写逻辑目前集中在 `src/db/sim.ts`。
+本项目当前通过 `src/db/connection.ts` 访问 Cloudflare D1。开发和预览环境使用 Wrangler local D1，生产环境使用 Cloudflare remote D1；schema 定义位于 `src/db/schema.sql`，主要读写逻辑目前集中在 `src/db/sim.ts`。
 
 ## 数据库角色
 
-- `sim.db`：模拟状态库，保存天级指标、工作事件、发布文章、董事会记录、七层快照和变更。
-- 文章源数据库：由 `src/db/articles.ts` 读取，用于从已有文章池中选择并发布内容。
+- Wrangler local D1：本地模拟状态库，保存天级指标、工作事件、发布文章、董事会记录、七层快照和变更。
+- Cloudflare remote D1 `npc-db`：生产数据源，绑定名为 `NPC_DB`。
+- `items`：源文章表，由 `src/db/articles.ts` 读取，用于从已有文章池中选择并发布内容。
+- 根目录 `sim.db` / `agidaily.db`：历史或导入源文件；生产推送默认不再以 `sim.db` 为准，除非显式使用 `--from-root-sqlite`。
 - `sim.db-shm`、`sim.db-wal`：SQLite 运行时附属文件，不应作为业务资产维护。
 
 ## 核心表
