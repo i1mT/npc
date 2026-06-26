@@ -19,7 +19,11 @@
     "verify:board": "tsx scripts/verify-board.ts",
     "verify:agent-prompts": "tsx scripts/verify-agent-prompt-contracts.ts",
     "verify:tavily-cover": "tsx scripts/verify-tavily-cover.ts",
-    "sim:reset": "tsx scripts/reset-sim.ts"
+    "sim:reset": "tsx scripts/reset-sim.ts",
+    "db:push": "tsx scripts/push-to-prod.ts",
+    "db:push:sim-only": "tsx scripts/push-to-prod.ts --sim-only",
+    "db:push:all": "tsx scripts/push-to-prod.ts --all-articles",
+    "db:push:dry": "tsx scripts/push-to-prod.ts --dry-run"
   },
   "dependencies": {
     "@ai-sdk/openai": "^3.0.73",

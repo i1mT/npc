@@ -138,6 +138,20 @@ export async function getArticleSourcesByIds(ids: string[]) {
   return new Map(rows.map((row) => [row.id, mapArticleRow(row)]));
 }
 
+/** Resolve a list of URLs to their corresponding article hex IDs (url → id map). */
+export async function resolveArticleIdsByUrls(urls: string[]) {
+  const uniqueUrls = [...new Set(urls.filter(Boolean))];
+  if (!uniqueUrls.length) return new Map<string, string>();
+
+  const placeholders = uniqueUrls.map(() => "?").join(",");
+  const rows = await dbAll<{ id: string; url: string }>(
+    `SELECT id, url FROM items WHERE url IN (${placeholders})`,
+    ...uniqueUrls,
+  );
+
+  return new Map(rows.map((row) => [row.url, row.id]));
+}
+
 export async function countSourceArticles() {
   const row = await dbFirst<{ count: number }>("SELECT COUNT(*) AS count FROM items");
   return row?.count ?? 0;

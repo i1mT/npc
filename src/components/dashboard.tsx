@@ -260,6 +260,17 @@ function ContentRenderer({ event, typewrite }: { event: SimEvent; typewrite?: bo
 
 // ─── @mention rendering ───────────────────────────────────────────────────────
 
+const MENTION_MARKER = "\u{E001}";
+const MENTION_RE_GLOBAL = /@([A-Za-z0-9_\-一-鿿]{1,16})/g;
+
+function MentionChip({ name }: { name: string }) {
+  return (
+    <span className="inline-flex items-center rounded bg-cobalt px-2 py-0.5 text-[13px] font-bold text-white leading-snug mx-0.5 whitespace-nowrap">
+      @{name}
+    </span>
+  );
+}
+
 // ─── Event grouping ───────────────────────────────────────────────────────────
 
 type EventItem =
@@ -564,11 +575,41 @@ function SysBubble({ event, delay }: { event: SimEvent; delay: number }) {
 
 // Render @mentions as highlighted chips inside markdown text
 function MdWithMentions({ text }: { text: string }) {
-  // Pre-process: replace @handle with a placeholder span we'll detect
-  const MENTION_RE = /@([A-Za-z0-9_\-\u4e00-\u9fff]{1,16})/g;
-  // Just use ReactMarkdown and post-process mentions in text nodes
-  const processed = text.replace(MENTION_RE, (_, handle) => `**@${handle}**`);
-  return <MdText text={processed} />;
+  // Mark @mentions with MENTION_MARKER prefix so the strong renderer can detect them
+  const processed = text.replace(MENTION_RE_GLOBAL, (_, handle) => `**${MENTION_MARKER}${handle}**`);
+  return (
+    <ReactMarkdown
+      remarkPlugins={[remarkGfm]}
+      components={{
+        p:      ({ children }) => <p className="mb-2 last:mb-0 text-sm leading-7 text-ink/80">{children}</p>,
+        strong: ({ children }) => {
+          const raw = typeof children === "string" ? children
+            : Array.isArray(children) && children.length === 1 && typeof children[0] === "string" ? children[0]
+            : null;
+          if (raw?.startsWith(MENTION_MARKER)) {
+            return <MentionChip name={raw.slice(MENTION_MARKER.length)} />;
+          }
+          return <strong className="font-bold text-ink">{children}</strong>;
+        },
+        em:     ({ children }) => <em className="italic text-ink/70">{children}</em>,
+        ul:     ({ children }) => <ul className="mb-2 ml-4 list-disc space-y-0.5 text-sm text-ink/80">{children}</ul>,
+        ol:     ({ children }) => <ol className="mb-2 ml-4 list-decimal space-y-0.5 text-sm text-ink/80">{children}</ol>,
+        li:     ({ children }) => <li className="leading-6">{children}</li>,
+        code:   ({ children, className }) =>
+          className
+            ? <code className="block rounded bg-ink/5 px-3 py-2 text-xs font-mono text-ink/75 whitespace-pre-wrap my-2">{children}</code>
+            : <code className="rounded bg-ink/8 px-1 py-0.5 text-xs font-mono text-ink/75">{children}</code>,
+        blockquote: ({ children }) => <blockquote className="border-l-2 border-ink/20 pl-3 text-ink/60 italic my-2">{children}</blockquote>,
+        h1: ({ children }) => <h1 className="text-base font-black mb-1 mt-2">{children}</h1>,
+        h2: ({ children }) => <h2 className="text-sm font-black mb-1 mt-2 text-ink/80">{children}</h2>,
+        h3: ({ children }) => <h3 className="text-sm font-bold mb-0.5 mt-1.5 text-ink/70">{children}</h3>,
+        a:  ({ children, href }) => <a href={href} target="_blank" rel="noreferrer" className="text-cobalt underline">{children}</a>,
+        hr: () => <hr className="border-rule my-3" />,
+      }}
+    >
+      {processed}
+    </ReactMarkdown>
+  );
 }
 
 function ChatBubble({ event, tools, delay, isLatest }: { event: SimEvent; tools: SimEvent[]; delay: number; isLatest?: boolean }) {
