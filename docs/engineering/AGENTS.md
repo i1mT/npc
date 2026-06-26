@@ -15,7 +15,8 @@
 
 - 页面入口：`app/`
 - API 入口：`app/api/`
-- 模拟引擎：`src/simulation/engine.ts`
+- Dashboard 模拟推进：`src/mastra/workflows/streamed-day/`
+- Legacy 模拟引擎：`src/simulation/engine.ts`
 - Mastra 工作流：`src/mastra/workflows/`
 - 数据访问：`src/db/`
 - 类型契约：`src/lib/types.ts`
@@ -24,5 +25,6 @@
 ## 当前工程风险
 
 - `src/db/sim.ts` 文件过长且职责较集中，后续数据层迭代应拆分。
+- `src/mastra/workflows/agentic-day.ts` 是 legacy 长任务实现，文件过长；Dashboard 新增推进能力应放在 `src/mastra/workflows/streamed-day/`，保持单 turn stream 和分层文件结构。
 - `npm run lint` 当前使用 `next lint`，在 Next.js 15 中不可用，应修正为项目可执行的 lint 命令。
 - `sim.db-shm`、`sim.db-wal`、`.DS_Store` 这类本地运行产物不应进入版本控制。

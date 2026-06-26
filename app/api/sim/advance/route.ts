@@ -1,12 +1,11 @@
 import { NextResponse } from "next/server";
-import { simClock } from "@/simulation/engine";
+import { startStreamedDayRun } from "@/mastra/workflows/streamed-day/runner";
 
 export const dynamic = "force-dynamic";
 
 export async function POST() {
   try {
-    const state = await simClock.advanceOneDay();
-    return NextResponse.json({ state });
+    return NextResponse.json(await startStreamedDayRun(1));
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : "Unknown error" }, { status: 409 });
   }

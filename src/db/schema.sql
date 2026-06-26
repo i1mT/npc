@@ -53,6 +53,44 @@ CREATE TABLE IF NOT EXISTS sim_settings (
   updated_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS sim_day_runs (
+  id                  TEXT PRIMARY KEY,
+  day                 INTEGER NOT NULL,
+  status              TEXT NOT NULL,
+  phase               TEXT NOT NULL,
+  target_days          INTEGER NOT NULL DEFAULT 1,
+  thread_id            TEXT NOT NULL,
+  runtime_id           TEXT NOT NULL,
+  agent_queue          TEXT NOT NULL,
+  next_turn_no         INTEGER NOT NULL DEFAULT 1,
+  total_input_tokens   INTEGER NOT NULL DEFAULT 0,
+  total_output_tokens  INTEGER NOT NULL DEFAULT 0,
+  error                TEXT,
+  created_at           TEXT NOT NULL,
+  updated_at           TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS sim_llm_turns (
+  id             TEXT PRIMARY KEY,
+  run_id         TEXT NOT NULL,
+  day            INTEGER NOT NULL,
+  kind           TEXT NOT NULL,
+  status         TEXT NOT NULL,
+  agent_id       TEXT NOT NULL,
+  agent_name     TEXT NOT NULL,
+  role_template  TEXT NOT NULL,
+  turn_no        INTEGER NOT NULL,
+  prompt         TEXT NOT NULL,
+  mentioned_by   TEXT,
+  output_text    TEXT,
+  input_tokens   INTEGER NOT NULL DEFAULT 0,
+  output_tokens  INTEGER NOT NULL DEFAULT 0,
+  metadata       TEXT,
+  error          TEXT,
+  created_at     TEXT NOT NULL,
+  updated_at     TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS board_directives (
   id         TEXT PRIMARY KEY,
   day        INTEGER NOT NULL,
@@ -355,6 +393,8 @@ FROM work_events;
 CREATE INDEX IF NOT EXISTS idx_work_events_day_seq ON work_events(day, seq);
 CREATE INDEX IF NOT EXISTS idx_work_events_actor ON work_events(actor_id);
 CREATE INDEX IF NOT EXISTS idx_work_events_layer ON work_events(layer, day);
+CREATE INDEX IF NOT EXISTS idx_sim_day_runs_status ON sim_day_runs(status, day);
+CREATE INDEX IF NOT EXISTS idx_sim_llm_turns_run ON sim_llm_turns(run_id, status, turn_no);
 CREATE INDEX IF NOT EXISTS idx_layer_changes_day ON layer_changes(layer, day);
 CREATE INDEX IF NOT EXISTS idx_articles_day ON published_articles(day);
 CREATE INDEX IF NOT EXISTS idx_days_completed ON sim_days(completed_at);

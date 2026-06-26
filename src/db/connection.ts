@@ -83,6 +83,8 @@ export async function rollbackToDay(targetDay: number) {
     "board_directives",
     "article_reviews",
     "human_comments",
+    "sim_llm_turns",
+    "sim_day_runs",
     "layer_snapshots",
     "layer_changes",
     "employee_soul_snapshots",
@@ -144,6 +146,8 @@ export async function resetSimDb() {
     DELETE FROM published_articles;
     DELETE FROM article_reviews;
     DELETE FROM human_comments;
+    DELETE FROM sim_llm_turns;
+    DELETE FROM sim_day_runs;
     DELETE FROM sim_days;
     DELETE FROM sim_settings;
   `);

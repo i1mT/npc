@@ -10,7 +10,7 @@ import { DayPicker } from "react-day-picker";
 import { zhCN } from "react-day-picker/locale";
 import { cn } from "@/lib/utils";
 import { dayToShortDate } from "@/lib/dates";
-import { useSimStream, type SimStatusSnapshot } from "@/components/live-sim";
+import { runSimDays, useSimStream, type SimStatusSnapshot } from "@/components/live-sim";
 
 // ─── Sim control bar ─────────────────────────────────────────────────────────
 
@@ -56,7 +56,7 @@ export function SimControlBar() {
     const nextDay = (sim?.day ?? 0) + 1;
     // Navigate first so the view is ready when events start streaming
     router.push(`/dashboard/work?day=${nextDay}`);
-    await fetch("/api/sim/start", { method: "POST", body: JSON.stringify({ days }) });
+    await runSimDays(days);
     setTimeout(async () => {
       const r = await fetch("/api/sim/status", { cache: "no-store" });
       if (r.ok) setSim(await r.json());
